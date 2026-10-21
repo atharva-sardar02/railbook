@@ -99,8 +99,8 @@ No user accounts: the passenger name is a field on the booking.
 | G1 | Gateway | **Kong Ingress Controller** (DB-less) via Helm. Routes `/trains`, `/bookings`, `/docs` to the API Service. |
 | G2 | Gateway | Kong plugins as `KongPlugin` resources: `correlation-id` (`X-Request-ID`), `prometheus`, `rate-limiting` on `POST /bookings`. |
 | C1 | CI | On PR (GitHub-hosted runner): `gitleaks`, `ruff`, `pytest` against a Postgres service container, Docker build, Trivy scan. |
-| C2 | CI | On push to `main` (GitHub-hosted): same checks, then push image to **GHCR** tagged with the git SHA. |
-| C3 | CD | On push to `main` (**self-hosted runner** on your laptop): `helm upgrade --install --rollback-on-failure --wait` with that tag; run seed Job; smoke test through Kong. |
+| C2 | CI | On push to `main` (GitHub-hosted): same checks, then push image to **GHCR** tagged with the git SHA. Actions pinned by commit SHA, tool images by digest, `GITHUB_TOKEN` read-only except `packages: write` in the image job. |
+| C3 | CD | On push to `main` (**self-hosted runner** `railbook-laptop`, user `ghrunner`, systemd service): `helm upgrade --install --rollback-on-failure --wait --wait-for-jobs` with that tag; setup Job; smoke test through Kong. Runs as the `github-deployer` service account (namespace `railbook` only, 24 h token). |
 | M1 | Metrics | `kube-prometheus-stack` (Prometheus, Grafana, Alertmanager) via Helm. |
 | M2 | Metrics | ServiceMonitors for the API and Kong. |
 | M3 | Metrics | One Grafana dashboard (gateway + app) and one alert rule (5xx rate). |
@@ -281,8 +281,9 @@ If running late, the day runs longer — nothing is cut. Building every piece, i
   - Branch protection on `main`: PRs required, checks must pass, no force pushes.
   - Runner runs as a dedicated non-admin WSL user, with access only to Docker and the kind kubeconfig.
   - Stop the runner service when not working on the project.
-- **GHCR package is private by default.** The first push creates a private package and kind fails with `ImagePullBackOff`. Set the package's visibility to public once.
-- **Kubeconfig for the runner.** Export it with `kind export kubeconfig` into the runner user's home; the runner doesn't need your personal kubeconfig.
+- **GHCR package visibility.** With the `org.opencontainers.image.source` label linking it to this public repo, the package came out **public** (verified with an anonymous pull). Without that link it would be private and kind would fail with `ImagePullBackOff`.
+- **Kubeconfig for the runner.** Not kind's admin kubeconfig: a `github-deployer` service account limited to the `railbook` namespace, with a 24 h token from `kubectl create token` (`scripts/setup-runner.sh refresh-token`). Verified it can deploy but is forbidden from `vault`.
+- **Merging is deploying.** With auto-deploy on `main`, the merge button is a production decision; Claude Code's auto mode won't press it.
 - **Deploy safely.** Use `helm upgrade --install --rollback-on-failure --wait --timeout 5m` so a failed rollout rolls itself back. (Helm 4 renamed `--atomic` to `--rollback-on-failure`; many tutorials still show the old flag.)
 - **Never `latest`.** Deploy by git SHA tag so you know exactly which build runs and rollback works.
 
@@ -335,6 +336,7 @@ If running late, the day runs longer — nothing is cut. Building every piece, i
 | 2026-10-20 | Postgres in its own Helm chart, installed before the app |
 | 2026-10-20 | Quick web frontend: static files served by the API (same image, same origin) |
 | 2026-10-20 | Local images tagged by content hash (`dev-<hash>`), never a fixed tag |
+| 2026-10-20 | Runner deploys as least-privilege `github-deployer` (namespace-scoped, 24 h token); branch protection on `main` incl. admins |
 | 2026-10-20 | Splunk Free in Docker on the `kind` network |
 | 2026-10-20 | WSL memory stays at 8 GB; stack fits a memory budget (§6.1) |
 | 2026-10-20 | App follows the Twelve-Factor methodology (§3.3) |

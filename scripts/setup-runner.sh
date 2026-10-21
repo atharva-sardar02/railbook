@@ -60,8 +60,17 @@ install() {
   kubectl --context "$CONTEXT" apply -f deploy/rbac/github-deployer.yaml
 
   echo "== helm + kubectl for all users =="
-  sudo install -m 755 "$(command -v helm)" /usr/local/bin/helm
-  sudo install -m 755 "$(command -v kubectl)" /usr/local/bin/kubectl
+  local tool src
+  for tool in helm kubectl; do
+    # Resolve symlinks first (Docker Desktop links kubectl into /usr/local/bin). Copying a path
+    # onto itself makes `install` delete the destination before reading the source.
+    src=$(readlink -f "$(command -v "$tool")")
+    if [ "$src" = "/usr/local/bin/$tool" ]; then
+      echo "$tool already in /usr/local/bin"
+    else
+      sudo install -m 755 "$src" "/usr/local/bin/$tool"
+    fi
+  done
 
   echo "== kubeconfig for $RUNNER_USER =="
   install_kubeconfig
@@ -76,8 +85,11 @@ install() {
   digest=$(gh api "repos/actions/runner/releases/tags/v$RUNNER_VERSION" \
     --jq ".assets[] | select(.name==\"$tarball\") | .digest" | cut -d: -f2)
   echo "$digest  $tmpdir/$tarball" | sha256sum -c -
+  # The download sits in your private temp dir, which ghrunner can't read: extract as root,
+  # then give the whole runner directory to ghrunner.
   sudo install -d -o "$RUNNER_USER" -g "$RUNNER_USER" -m 750 "$RUNNER_DIR"
-  sudo -u "$RUNNER_USER" tar -xzf "$tmpdir/$tarball" -C "$RUNNER_DIR"
+  sudo tar -xzf "$tmpdir/$tarball" -C "$RUNNER_DIR"
+  sudo chown -R "$RUNNER_USER:$RUNNER_USER" "$RUNNER_DIR"
   rm -rf "$tmpdir"
 
   echo "== register with GitHub =="
@@ -89,7 +101,8 @@ install() {
     --name railbook-laptop --labels kind --work _work"
 
   echo "== run as a systemd service (starts with WSL) =="
-  (cd "$RUNNER_DIR" && sudo ./svc.sh install "$RUNNER_USER" && sudo ./svc.sh start)
+  # Run inside sudo: the runner directory belongs to ghrunner (mode 750), so you can't cd into it.
+  sudo bash -c "cd '$RUNNER_DIR' && ./svc.sh install '$RUNNER_USER' && ./svc.sh start"
   gh api "repos/$REPO/actions/runners" --jq '.runners[] | "\(.name): \(.status) labels=\([.labels[].name] | join(","))"'
 }
 
