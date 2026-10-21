@@ -1,0 +1,38 @@
+[project]
+name = "railbook"
+version = "0.1.0"
+description = "Minimal train ticket booking API"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "sqlalchemy>=2",
+    "psycopg[binary]>=3",
+    "pydantic-settings>=2",
+    "structlog",
+    "prometheus-client",
+    "prometheus-fastapi-instrumentator",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "httpx",
+    "ruff",
+]
+
+[tool.uv]
+# Only resolve releases at least two weeks old (supply-chain safety).
+exclude-newer = "2026-10-06T00:00:00Z"
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S"]
+ignore = ["S101"]  # assert is fine in tests
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -124,7 +124,7 @@ No user accounts: the passenger name is a field on the booking.
 | Layer | Choice | Notes |
 |---|---|---|
 | Language / framework | **Python 3.12 + FastAPI** | `prometheus-fastapi-instrumentator`, `structlog`, `pydantic-settings`. |
-| Database | **PostgreSQL 16** (official image) as a StatefulSet in the Helm chart | Tables created at startup — no Alembic. |
+| Database | **PostgreSQL 16** (official image) as a StatefulSet in the Helm chart | Tables created by the admin Job (`python -m app.admin setup`), owned by a `railbook_owner` group role so they never belong to an expiring Vault user — no Alembic. |
 | ORM | SQLAlchemy 2.x | |
 | Tests | pytest + httpx | |
 | Cluster | **kind** (Kubernetes in Docker), single node, in WSL2 | `kind-config.yaml` with port 80 mapping. |
@@ -300,7 +300,7 @@ If running late, the day runs longer — nothing is cut. Building every piece, i
 | TLS on Kong | Plain HTTP on `localhost`. |
 | Kong Enterprise features, Kong Manager | Open-source Kong only. |
 | Production Vault (Raft storage, auto-unseal, HA) | Dev mode. |
-| Alembic migrations | Tables created at startup. |
+| Alembic migrations | Tables created by the admin Job. |
 | GitOps (Argo CD), tracing, autoscaling, service mesh | Not among the concepts. |
 
 ---
