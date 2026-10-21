@@ -1,0 +1,155 @@
+# CI/CD for RailBook.
+#
+#   pull_request → checks + image (build & scan only)        on GitHub-hosted runners
+#   push to main → checks + image (build, scan, PUSH to GHCR) on GitHub-hosted runners
+#                → deploy (helm upgrade on kind)              on the self-hosted runner, laptop
+#
+# Third-party actions are pinned to a full commit SHA (tags can be moved; SHAs can't).
+# Tool images are pinned by digest for the same reason.
+name: ci-cd
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# The automatic GITHUB_TOKEN gets read-only access by default; jobs widen it only where needed.
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+  TRIVY_IMAGE: aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
+  GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    # A real Postgres for the tests (dev/prod parity, factor X): row locks and ON CONFLICT
+    # behave exactly as in kind. Port 5433 matches the defaults in tests/conftest.py.
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+        env:
+          POSTGRES_USER: railbook
+          POSTGRES_PASSWORD: railbook  # throwaway CI database, destroyed with the VM
+          POSTGRES_DB: railbook
+        ports: ["5433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U railbook" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0              # full history, so gitleaks also scans past commits
+          persist-credentials: false  # don't leave the token in .git/config for later steps
+
+      - name: Secret scan (gitleaks)
+        run: docker run --rm -v "$PWD:/repo" "$GITLEAKS_IMAGE" git /repo --redact --verbose
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies (exactly as locked)
+        run: uv sync --frozen
+
+      - name: Lint
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: Tests
+        run: uv run pytest -q
+
+      - name: Helm lint
+        run: |
+          helm lint deploy/charts/railbook
+          helm lint deploy/charts/postgres
+
+  image:
+    needs: checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # push to GHCR; only used on main (see the push step's condition)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Build once, load into the runner's Docker so Trivy can scan the exact image we'd push.
+      - name: Build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          push: false
+          tags: ${{ env.IMAGE }}:${{ github.sha }}
+          # Links the GHCR package to this repo and records the exact commit in the image.
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Fails the pipeline on HIGH/CRITICAL vulnerabilities that have a fix available.
+      - name: Vulnerability scan (Trivy)
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$TRIVY_IMAGE" \
+            image --no-progress --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed \
+            "$IMAGE:${{ github.sha }}"
+
+      # GITHUB_TOKEN is created for this run only and expires when it ends: no stored password.
+      - name: Log in to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: docker push "$IMAGE:${{ github.sha }}"
+
+  deploy:
+    needs: image
+    # Never for pull requests: only reviewed code that reached main runs on the laptop.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, kind]
+    # Shows up under the repo's Environments/Deployments, with the commit that's live.
+    environment:
+      name: local-kind
+      url: http://127.0.0.1/
+    # One deploy at a time; a newer push waits instead of racing the older one.
+    concurrency:
+      group: deploy-local-kind
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Release = this commit's image + the chart's config (factor V). If pods don't become
+      # Ready or the setup Job fails, Helm rolls back to the previous revision by itself.
+      - name: Deploy with Helm
+        run: |
+          helm upgrade --install railbook deploy/charts/railbook -n railbook \
+            --set image.repository="$IMAGE" \
+            --set image.tag="${{ github.sha }}" \
+            --rollback-on-failure --wait --wait-for-jobs --timeout 5m
+
+      - name: Smoke test through Kong
+        run: |
+          for path in / /stations; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --retry 5 --retry-delay 2 --retry-all-errors "http://127.0.0.1$path")
+            echo "$path -> $code"
+            [ "$code" = 200 ] || exit 1
+          done
+
+      - name: Record what is running
+        run: |
+          helm history railbook -n railbook --max 3
+          kubectl get deploy railbook-api -n railbook -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'

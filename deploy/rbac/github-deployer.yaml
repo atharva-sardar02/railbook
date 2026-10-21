@@ -1,0 +1,55 @@
+# Least-privilege identity for the self-hosted runner.
+#
+# kind's own kubeconfig is cluster-admin (full control of Vault, Kong, everything). The runner
+# only needs to deploy the app chart into the railbook namespace, so that's all it can do.
+# If the runner were ever compromised, it couldn't read Vault or change other namespaces.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: github-deployer
+  namespace: railbook
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: github-deployer
+  namespace: railbook
+rules:
+  # Objects the app chart creates. "secrets" is needed because Helm stores each release
+  # revision as a Secret in the namespace; the namespace holds no application secrets (Vault does).
+  - apiGroups: [""]
+    resources: [configmaps, services, serviceaccounts, secrets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [configuration.konghq.com]
+    resources: [kongplugins]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # Read-only: what `helm --wait` watches, and what you need to debug a failed deploy.
+  - apiGroups: [""]
+    resources: [pods, pods/log, events]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: github-deployer
+  namespace: railbook
+subjects:
+  - kind: ServiceAccount
+    name: github-deployer
+    namespace: railbook
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: github-deployer
