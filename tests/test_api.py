@@ -34,6 +34,21 @@ def test_health_and_readiness(client):
     assert client.get("/readyz").json() == {"status": "ready"}
 
 
+def test_stations_sorted_by_name(client):
+    stations = client.get("/stations").json()
+    assert len(stations) == 5
+    assert [s["name"] for s in stations] == sorted(s["name"] for s in stations)
+
+
+def test_frontend_is_served(client):
+    page = client.get("/")
+    assert page.status_code == 200
+    assert "text/html" in page.headers["content-type"]
+    assert '<script src="/static/app.js"' in page.text
+    assert client.get("/static/app.js").status_code == 200
+    assert client.get("/static/styles.css").status_code == 200
+
+
 def test_search_returns_seeded_train(client):
     resp = client.get("/trains", params={"from": "ndls", "to": "bct", "date": TODAY})
     assert resp.status_code == 200

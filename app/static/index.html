@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RailBook</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap">
+      <span class="logo">RailBook</span>
+      <span class="tagline">Train tickets, minus the queue</span>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="card" aria-labelledby="search-title">
+      <h1 id="search-title">Find a train</h1>
+      <form id="search-form" class="search-grid">
+        <label>From
+          <select id="from" required></select>
+        </label>
+        <button type="button" id="swap" class="icon-btn" aria-label="Swap stations" title="Swap stations">⇄</button>
+        <label>To
+          <select id="to" required></select>
+        </label>
+        <label>Date
+          <input type="date" id="date" required>
+        </label>
+        <button type="submit" class="primary">Search</button>
+      </form>
+    </section>
+
+    <section id="results" aria-live="polite"></section>
+
+    <section class="card" aria-labelledby="pnr-title">
+      <h2 id="pnr-title">My booking</h2>
+      <form id="pnr-form" class="pnr-row">
+        <input id="pnr" inputmode="numeric" pattern="[0-9]{10}" maxlength="10"
+               placeholder="10-digit PNR" aria-label="PNR" required>
+        <button type="submit">Look up</button>
+      </form>
+      <div id="pnr-result"></div>
+    </section>
+  </main>
+
+  <dialog id="book-dialog">
+    <form id="book-form" method="dialog">
+      <h2>Book seats</h2>
+      <p id="book-summary" class="muted"></p>
+      <label>Passenger name
+        <input id="passenger" maxlength="100" required autocomplete="name">
+      </label>
+      <label>Seats
+        <input id="seats" type="number" min="1" max="6" value="1" required>
+      </label>
+      <label class="check">
+        <input id="fail-payment" type="checkbox">
+        Simulate a declined payment
+      </label>
+      <p id="book-total" class="total"></p>
+      <div class="dialog-actions">
+        <button type="button" id="book-cancel">Cancel</button>
+        <button type="submit" class="primary" id="book-submit">Pay &amp; book</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

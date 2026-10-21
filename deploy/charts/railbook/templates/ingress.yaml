@@ -3,7 +3,8 @@
 # (path + method) and every other request matches the first.
 #
 # /metrics, /healthz and /readyz are deliberately NOT routed: they are for Prometheus and
-# Kubernetes inside the cluster, not for the public.
+# Kubernetes inside the cluster, not for the public. That's also why the frontend's "/" is an
+# Exact path: a "/" Prefix would match every path, /metrics included.
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -18,7 +19,7 @@ spec:
   rules:
     - http:
         paths:
-          {{- range list "/trains" "/bookings" "/docs" }}
+          {{- range list "/trains" "/bookings" "/stations" "/static" "/docs" }}
           - path: {{ . }}
             pathType: Prefix
             backend:
@@ -26,12 +27,14 @@ spec:
                 name: railbook-api
                 port: { name: http }
           {{- end }}
-          - path: /openapi.json
+          {{- range list "/" "/openapi.json" }}
+          - path: {{ . }}
             pathType: Exact
             backend:
               service:
                 name: railbook-api
                 port: { name: http }
+          {{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress

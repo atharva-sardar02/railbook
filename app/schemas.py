@@ -1,7 +1,14 @@
 from datetime import date, time
 from decimal import Decimal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class StationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)  # build directly from the ORM object
+
+    code: str
+    name: str
 
 
 class ClassAvailability(BaseModel):

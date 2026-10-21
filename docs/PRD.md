@@ -43,7 +43,7 @@ The app is built as a **[Twelve-Factor App](https://12factor.net/)**. The twelve
 | P2 | As a passenger, I want to book seats. | Returns a PNR; booking fails cleanly if not enough seats; no double booking. |
 | P3 | As a passenger, I want to look up and cancel a booking by PNR. | Cancel returns seats to inventory. |
 
-All passenger traffic enters through Kong at `http://localhost`.
+All passenger traffic enters through Kong at `http://127.0.0.1` — the web frontend at `/`, or the API directly.
 
 ### 2.2 Developer
 
@@ -85,7 +85,9 @@ All passenger traffic enters through Kong at `http://localhost`.
 | F4 | `GET /bookings/{pnr}`, `DELETE /bookings/{pnr}` | Lookup and cancel. |
 | F5 | `/metrics`, `/healthz`, `/readyz` | Prometheus endpoint + Kubernetes probes. |
 | F6 | JSON logs to stdout | `request_id` (from Kong's header), `pnr`, `path`, `status`, `duration_ms`. |
-| F7 | Swagger UI at `/docs` | Used as the "frontend" for the demo. |
+| F7 | Web frontend at `/` | Static HTML + JS + CSS in `app/static/`, served by the API from the same image (same origin, no CORS). Search, book, PNR lookup, cancel; shows each response's `X-Request-ID`; handles 402/409/429. No external scripts or fonts. |
+| F8 | `GET /stations` | Station list for the frontend's dropdowns. |
+| F9 | Swagger UI at `/docs` | API docs. |
 
 No user accounts: the passenger name is a field on the booking.
 
@@ -307,7 +309,6 @@ If running late, the day runs longer — nothing is cut. Building every piece, i
 | Multi-node cluster, HA for anything | Not needed to learn the concepts; costs RAM. |
 | User accounts, login, roles | Not among the concepts. |
 | Admin endpoints | Seed Job instead. |
-| Frontend | Swagger UI is enough. |
 | Real payments | Mock only. |
 | Waitlist, RAC, Tatkal, seat maps | Domain complexity with no platform value. |
 | Multiple environments (staging/prod) | One namespace. |
@@ -332,6 +333,8 @@ If running late, the day runs longer — nothing is cut. Building every piece, i
 | 2026-10-20 | Public GitHub repo |
 | 2026-10-20 | HashiCorp Vault in kind with persistent Raft storage (not dev mode) + Agent Injector; all secrets from Vault, no Kubernetes Secrets |
 | 2026-10-20 | Postgres in its own Helm chart, installed before the app |
+| 2026-10-20 | Quick web frontend: static files served by the API (same image, same origin) |
+| 2026-10-20 | Local images tagged by content hash (`dev-<hash>`), never a fixed tag |
 | 2026-10-20 | Splunk Free in Docker on the `kind` network |
 | 2026-10-20 | WSL memory stays at 8 GB; stack fits a memory budget (§6.1) |
 | 2026-10-20 | App follows the Twelve-Factor methodology (§3.3) |

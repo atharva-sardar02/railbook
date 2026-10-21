@@ -10,7 +10,7 @@ Needs Docker, kind, Helm and kubectl. Brings up kind, Kong, Vault, Postgres and 
 
 ```bash
 scripts/bootstrap.sh          # safe to rerun; also re-unseals Vault after a restart
-open http://127.0.0.1/docs    # Swagger UI through Kong
+open http://127.0.0.1/         # web frontend through Kong (API docs at /docs)
 ```
 
 Vault's unseal keys and root token are written to `~/.railbook/vault-init.json` — keep that file safe and never commit it.
@@ -18,4 +18,5 @@ Vault's unseal keys and root token are written to `~/.railbook/vault-init.json` 
 ## Learning notes
 
 - [Block 1 — The booking API, explained](docs/learning/01-app.md)
+- [Block 1b — The quick frontend, explained](docs/learning/01b-frontend.md)
 - [Block 2 — kind, Kong and Vault, explained](docs/learning/02-kind-kong-vault.md)

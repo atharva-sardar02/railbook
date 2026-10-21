@@ -8,7 +8,8 @@ cd "$(dirname "$0")/.."
 
 KONG_CHART_VERSION=0.24.0
 VAULT_CHART_VERSION=0.34.1
-IMAGE_TAG="${IMAGE_TAG:-dev}"
+# IMAGE_TAG unset = build locally. CI sets it to a git SHA that already exists in GHCR.
+IMAGE_TAG="${IMAGE_TAG:-}"
 
 step() { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
 
@@ -41,14 +42,20 @@ helm upgrade --install railbook-postgres deploy/charts/postgres \
   -n railbook --create-namespace --wait --timeout 5m
 scripts/vault-setup.sh database
 
-step "RailBook app (image railbook:$IMAGE_TAG)"
-if [ "$IMAGE_TAG" = dev ]; then
-  # Local image: build it and copy it into kind's own image store (no registry involved).
-  docker build -q -t railbook:dev . >/dev/null
-  kind load docker-image railbook:dev --name railbook
+if [ -z "$IMAGE_TAG" ]; then
+  # Local build. Tag = the image's content hash, so new code => new tag => Helm sees a change
+  # and rolls the pods. A fixed tag like "dev" would never change, so `helm upgrade` would
+  # leave the old pods running old code (factor V: a release must name the exact build).
+  docker build -q -t railbook:build . >/dev/null
+  IMAGE_TAG="dev-$(docker image inspect -f '{{.Id}}' railbook:build | cut -d: -f2 | cut -c1-12)"
+  docker tag railbook:build "railbook:$IMAGE_TAG"
+  # Copy it into kind's own image store (no registry involved). Skipped if already there.
+  kind load docker-image "railbook:$IMAGE_TAG" --name railbook
 fi
+
+step "RailBook app (image railbook:$IMAGE_TAG)"
 helm upgrade --install railbook deploy/charts/railbook -n railbook \
   --set image.tag="$IMAGE_TAG" --rollback-on-failure --wait --wait-for-jobs --timeout 5m
 
 step "Ready"
-echo "API through Kong: http://127.0.0.1/docs"
+echo "Frontend through Kong: http://127.0.0.1/  (API docs: /docs)"

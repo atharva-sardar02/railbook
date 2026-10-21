@@ -6,10 +6,15 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_session
-from app.models import Inventory, Schedule, Train
-from app.schemas import ClassAvailability, TrainResult
+from app.models import Inventory, Schedule, Station, Train
+from app.schemas import ClassAvailability, StationOut, TrainResult
 
 router = APIRouter(tags=["trains"])
+
+
+@router.get("/stations", response_model=list[StationOut])
+def list_stations(session: Annotated[Session, Depends(get_session)]) -> list[Station]:
+    return list(session.scalars(select(Station).order_by(Station.name)))
 
 
 @router.get("/trains", response_model=list[TrainResult])
