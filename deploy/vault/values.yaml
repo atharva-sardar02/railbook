@@ -1,0 +1,65 @@
+# Values for the hashicorp/vault Helm chart: one persistent Vault server + the Agent Injector.
+# Install: helm upgrade --install vault hashicorp/vault --version 0.34.1 -n vault --create-namespace -f deploy/vault/values.yaml
+
+server:
+  # "ha" mode with Raft storage and a single replica: Vault's built-in storage engine on a PVC.
+  # Data survives restarts (unlike dev mode). One replica = no high availability, which is fine here.
+  ha:
+    enabled: true
+    replicas: 1
+    raft:
+      enabled: true
+      setNodeId: true
+      config: |
+        ui = true
+
+        listener "tcp" {
+          # Plain HTTP inside the cluster only; TLS is out of scope for a local setup.
+          tls_disable = 1
+          address = "[::]:8200"
+          cluster_address = "[::]:8201"
+          telemetry {
+            # Lets Prometheus scrape /v1/sys/metrics without a Vault token.
+            unauthenticated_metrics_access = "true"
+          }
+        }
+
+        storage "raft" {
+          path = "/vault/data"
+        }
+
+        # mlock stops secrets in memory being swapped to disk. Raft storage uses memory-mapped
+        # files, which don't work with mlock, so HashiCorp recommends disabling it with Raft.
+        disable_mlock = true
+
+        telemetry {
+          prometheus_retention_time = "30s"
+          disable_hostname = true
+        }
+
+        service_registration "kubernetes" {}
+
+  dataStorage:
+    enabled: true
+    size: 1Gi
+
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 256Mi }
+
+# Vault's web UI on a ClusterIP Service: open it with kubectl port-forward, never exposed publicly.
+ui:
+  enabled: true
+
+injector:
+  enabled: true
+  resources:
+    requests: { cpu: 25m, memory: 32Mi }
+    limits: { memory: 96Mi }
+  # Defaults for the agent containers injected into app pods. The chart's defaults
+  # (250m CPU, 64-128Mi each) are sized for production; ours serve a few requests a minute.
+  agentDefaults:
+    cpuRequest: "25m"
+    cpuLimit: "200m"
+    memRequest: "32Mi"
+    memLimit: "64Mi"

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: railbook
+description: RailBook booking API, its Postgres database and Kong routing
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: railbook-postgres
+description: PostgreSQL for RailBook — a backing service (factor IV) with its own lifecycle, separate from the app
+type: application
+version: 0.1.0
+appVersion: "16"

@@ -10,6 +10,16 @@ RailBook is a minimal train ticket booking API, built in **one day** to learn fo
 
 **All four concepts are mandatory and are built in full as specified.** No shortcuts or fallbacks to save time (§5).
 
+Everything runs on your machine:
+
+```
+RailBook (kind)
+  ├── Traffic ──────> Kong Gateway ──> API pods ──> Postgres
+  ├── Metrics ──────> Prometheus ──> Grafana        (in kind)
+  ├── Logs ─────────> Splunk                        (Docker, next to kind)
+  └── Secrets ──────> HashiCorp Vault               (in kind)
+```
+
 The app is built as a **[Twelve-Factor App](https://12factor.net/)**. The twelve factors are the design rules that make the four concepts fit together: logs as streams (Splunk), config and secrets from the environment (Vault), build-release-run (CI/CD), and stateless processes that scale by count (Prometheus). **Kong Gateway** is the single entry point and router in front of the API. §3.3 maps each factor to how RailBook meets it.
 
 ### Done when
@@ -95,10 +105,10 @@ No user accounts: the passenger name is a field on the booking.
 | L1 | Logs | Splunk Free in Docker on your laptop, attached to the `kind` Docker network, HEC enabled. |
 | L2 | Logs | Splunk OTel Collector for Kubernetes (Helm) → Splunk HEC. Only the `railbook` and `kong` namespaces. |
 | L3 | Logs | Saved searches: errors by route, one request by `request_id`, 429s from rate limiting. |
-| V1 | Secrets | Vault in dev mode (Helm), Kubernetes auth method, Agent Injector. |
-| V2 | Secrets | Vault database secrets engine → dynamic Postgres credentials. |
-| V3 | Secrets | Vault KV v2 → mock payment key, Splunk HEC token. |
-| V4 | Secrets | Vault configuration as a re-runnable script in the repo (`scripts/vault-setup.sh`). |
+| V1 | Secrets | Vault server with persistent Raft storage (Helm, 1 replica), initialised and unsealed by `scripts/vault-unseal.sh` (5 key shares, threshold 3; keys in `~/.railbook/`, outside the repo). Kubernetes auth method, Agent Injector. |
+| V2 | Secrets | Vault database secrets engine → a unique, short-lived Postgres user per API pod (1 h lease, renewed by the agent sidecar, 24 h max). |
+| V3 | Secrets | Vault KV v2 → Postgres admin password, mock payment key, Splunk HEC token. **No Kubernetes Secrets hold application secrets.** |
+| V4 | Secrets | Vault configuration as a re-runnable script in the repo (`scripts/vault-setup.sh base` before Postgres, `database` after). |
 
 ### 3.3 Twelve-Factor checklist
 
@@ -124,19 +134,19 @@ No user accounts: the passenger name is a field on the booking.
 | Layer | Choice | Notes |
 |---|---|---|
 | Language / framework | **Python 3.12 + FastAPI** | `prometheus-fastapi-instrumentator`, `structlog`, `pydantic-settings`. |
-| Database | **PostgreSQL 16** (official image) as a StatefulSet in the Helm chart | Tables created by the admin Job (`python -m app.admin setup`), owned by a `railbook_owner` group role so they never belong to an expiring Vault user — no Alembic. |
+| Database | **PostgreSQL 16** (official image) as a StatefulSet in its **own Helm chart** (`deploy/charts/postgres`), installed before the app; admin password from Vault | Tables created by the admin Job (`python -m app.admin setup`), owned by a `railbook_owner` group role so they never belong to an expiring Vault user — no Alembic. |
 | ORM | SQLAlchemy 2.x | |
 | Tests | pytest + httpx | |
 | Cluster | **kind** (Kubernetes in Docker), single node, in WSL2 | `kind-config.yaml` with port 80 mapping. |
 | Gateway | **Kong Ingress Controller** (open-source Kong Gateway, DB-less) | Configured with Ingress + `KongPlugin` resources. |
-| Packaging | Helm 4.3 | One chart for the API + Postgres; upstream charts for Kong, Vault, Prometheus, OTel. |
+| Packaging | Helm 4.3 | Own charts: `railbook` (API, routing, setup Job) and `postgres`; upstream charts for Kong, Vault, Prometheus, OTel. The pipeline deploys only the app chart. |
 | Tooling versions | kind v0.33.0, Helm v4.3.0, kubectl v1.36 | Installed in `~/.local/bin`. |
 | Image registry | **GitHub Container Registry (GHCR)** | Free for public repos; package set to public. |
 | CI | GitHub Actions on GitHub-hosted runners | PRs and `main`. |
 | CD | GitHub Actions **self-hosted runner** in WSL | `main` only. |
 | Metrics | `kube-prometheus-stack` | |
 | Logs | Splunk Enterprise (Free license) in Docker + Splunk OTel Collector for Kubernetes | Splunk lives outside kind, so rebuilding the cluster keeps logs. |
-| Secrets | **HashiCorp Vault** (dev mode) + Agent Injector | |
+| Secrets | **HashiCorp Vault** 2.0 (chart 0.34.1), persistent Raft storage + Agent Injector | Runs in kind; manual unseal by script after restarts. |
 | Security scans | gitleaks, Trivy | |
 
 ### Architecture
@@ -156,7 +166,7 @@ flowchart LR
             kong[Kong Ingress Controller]
             api[RailBook API ×N]
             pg[(PostgreSQL)]
-            vault[Vault dev mode<br/>+ Agent Injector]
+            vault[Vault · Raft on PVC<br/>+ Agent Injector]
             prom[Prometheus · Grafana<br/>· Alertmanager]
             otel[Splunk OTel Collector]
         end
@@ -184,12 +194,11 @@ flowchart LR
 |---|---|---|---|
 | 0 | Setup | 0:30 | kind + Helm installed, public GitHub repo, `.gitignore`, runner user created. |
 | 1 | App | 1:45 | FastAPI endpoints, env-based config, graceful shutdown, seed script, metrics, JSON logs, tests, Dockerfile — Twelve-Factor from the start. |
-| 2 | kind + Kong | 1:00 | Cluster up; Kong routing to the API; correlation-id, prometheus and rate-limiting plugins. |
-| 3 | CI/CD | 1:30 | Helm chart; PR and `main` workflows; GHCR push; self-hosted runner registered and deploying. |
-| 4 | Vault | 1:00 | Dev-mode Vault, K8s auth, DB engine, KV, injector feeding the API; setup script. |
-| 5 | Prometheus | 0:45 | `kube-prometheus-stack`, ServiceMonitors for API and Kong, dashboard, alert. |
-| 6 | Splunk | 0:45 | Splunk on the `kind` network, OTel Collector, saved searches. |
-| 7 | Verify | 0:45 | Run the six "done when" checks and the Twelve-Factor "how to show it" column. |
+| 2 | kind + Kong + Vault | 2:00 | Cluster; Kong routing + plugins; Vault init/unseal/config; Postgres chart; app chart with all secrets from Vault. |
+| 3 | CI/CD | 1:30 | PR and `main` workflows; GHCR push; self-hosted runner registered and deploying the app chart; branch protection. |
+| 4 | Prometheus + Grafana | 0:45 | `kube-prometheus-stack`, ServiceMonitors for API and Kong, dashboard, alert. |
+| 5 | Splunk | 0:45 | Splunk on the `kind` network, OTel Collector, saved searches. |
+| 6 | Verify | 0:45 | Run the six "done when" checks and the Twelve-Factor "how to show it" column. |
 | | **Total** | **~8:00** | |
 
 If running late, the day runs longer — nothing is cut. Building every piece, including where it gets stuck, is the point of the project.
@@ -218,7 +227,7 @@ If running late, the day runs longer — nothing is cut. Building every piece, i
 - **Single node.** Use one control-plane node only; a multi-node cluster costs ~1 GB per node and teaches nothing extra here.
 - **Port mapping is fixed at creation.** Port 80 must be in `extraPortMappings` in `kind-config.yaml` before `kind create cluster`; adding it later means recreating the cluster.
 - **"Too many open files".** A known kind issue on Linux. Raise `fs.inotify.max_user_watches` and `fs.inotify.max_user_instances` with `sysctl` before creating the cluster.
-- **Restarts.** kind usually survives a WSL restart, but not always. Keep everything re-creatable from the repo (`kind-config.yaml`, Helm values, `vault-setup.sh`); Vault dev mode loses its data on any restart anyway.
+- **Restarts.** kind usually survives a WSL restart, but not always. Vault comes back **sealed** after any restart: run `scripts/vault-unseal.sh`, and pods that start meanwhile wait in `Init` until it's unsealed. Everything is re-creatable from the repo with `scripts/bootstrap.sh`.
 - **Project location.** `/mnt/d` is slow from WSL. Moving the repo to `~/projects/railbook` makes builds and Git noticeably faster.
 
 ### 6.2 Kong Ingress Controller
@@ -233,11 +242,16 @@ If running late, the day runs longer — nothing is cut. Building every piece, i
 
 ### 6.3 Vault
 
-- **Dev mode is in memory.** It starts unsealed with a root token and loses everything on pod restart. `scripts/vault-setup.sh` must configure everything (K8s auth, DB engine, KV, policies) and be safe to run twice.
+- **Persistent, not dev mode.** Dev mode keeps data in memory: a restart would wipe the Postgres admin password while Postgres keeps the old one on disk, locking everyone out. Raft storage on a PVC avoids that, at the cost of init + unseal.
+- **Secret zero.** Unseal keys and the root token can't live in Vault. They are in `~/.railbook/vault-init.json` (`chmod 600`, outside the repo). Losing it makes Vault's data unrecoverable; leaking it opens Vault.
+- **Bring-up order matters:** Vault → unseal → `vault-setup.sh base` → Postgres chart → `vault-setup.sh database` → app chart. API pods started before the database engine is configured hang in `Init`.
+- **Jobs and sidecars.** A Job completes only when all containers exit; the agent sidecar never exits. Jobs use `agent-pre-populate-only`.
+- **Template whitespace.** In Vault Agent templates `{{-` trims the newline before it; misplaced, it glues `export` lines together and the shell fails to load the file.
+- **Audience.** Roles check the token's `aud` claim (`https://kubernetes.default.svc.cluster.local` on kind) so tokens issued for other services are rejected.
 - **Kubernetes auth.** Each Vault role is bound to one service account + namespace. A typo in either gives `permission denied` with little detail — check `vault read auth/kubernetes/role/<role>` first.
 - **Database engine.** Vault connects to Postgres as an admin user to create short-lived users. Postgres must be up before `vault-setup.sh` runs, and the creation SQL must grant the right table privileges or the API gets `permission denied for table`.
-- **TTL.** Credentials are read at startup (§6.7). Set the TTL longer than the day (e.g. 24 h) so pods don't lose DB access mid-session.
-- **HEC token for the OTel Collector.** The collector image has no shell, so the env-file trick in §6.7 doesn't work for it. `vault-setup.sh` reads the HEC token from Vault KV and creates the Kubernetes Secret the collector chart expects. Vault stays the single source; the K8s Secret is derived from it.
+- **TTL.** Credentials are read at startup (§6.7). The sidecar renews the 1 h lease up to the 24 h `max_ttl`; after that the pod must restart to pick up a new user. Pods that die without renewing (and the setup Job's user) are dropped by Vault within an hour.
+- **HEC token for the OTel Collector.** Must come from Vault like every other secret. The collector image has no shell, so the env-file trick in §6.7 doesn't work for it; the delivery method is decided in block 6.
 - **License.** Vault uses the Business Source License, free for learning and internal use.
 
 ### 6.4 Prometheus
@@ -299,7 +313,7 @@ If running late, the day runs longer — nothing is cut. Building every piece, i
 | Multiple environments (staging/prod) | One namespace. |
 | TLS on Kong | Plain HTTP on `localhost`. |
 | Kong Enterprise features, Kong Manager | Open-source Kong only. |
-| Production Vault (Raft storage, auto-unseal, HA) | Dev mode. |
+| Vault auto-unseal, HA (3+ replicas), TLS | One persistent Vault, unsealed by script. |
 | Alembic migrations | Tables created by the admin Job. |
 | GitOps (Argo CD), tracing, autoscaling, service mesh | Not among the concepts. |
 
@@ -316,7 +330,8 @@ If running late, the day runs longer — nothing is cut. Building every piece, i
 | 2026-10-20 | CI on GitHub-hosted runners; CD via self-hosted runner, `main` only |
 | 2026-10-20 | Images in GHCR (public), tagged with git SHA |
 | 2026-10-20 | Public GitHub repo |
-| 2026-10-20 | HashiCorp Vault (dev mode) + Agent Injector |
+| 2026-10-20 | HashiCorp Vault in kind with persistent Raft storage (not dev mode) + Agent Injector; all secrets from Vault, no Kubernetes Secrets |
+| 2026-10-20 | Postgres in its own Helm chart, installed before the app |
 | 2026-10-20 | Splunk Free in Docker on the `kind` network |
 | 2026-10-20 | WSL memory stays at 8 GB; stack fits a memory budget (§6.1) |
 | 2026-10-20 | App follows the Twelve-Factor methodology (§3.3) |

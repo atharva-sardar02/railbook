@@ -1,0 +1,33 @@
+# Default values for the RailBook chart. Everything environment-specific is set here or with --set,
+# never inside templates. The pipeline overrides image.tag with the git SHA on every deploy.
+# Postgres is a separate chart (deploy/charts/postgres) and must be installed first.
+
+image:
+  repository: railbook
+  tag: dev
+  pullPolicy: IfNotPresent
+
+api:
+  replicas: 2
+  port: 8000
+  logLevel: INFO
+  resources:
+    requests: { cpu: 50m, memory: 96Mi }
+    limits: { memory: 192Mi }
+
+database:
+  host: railbook-postgres
+  name: railbook
+  # Group role that owns the tables (see app/db.py: SET ROLE).
+  ownerRole: railbook_owner
+
+# All secrets come from Vault (scripts/vault-setup.sh configures these paths and the role).
+vault:
+  role: railbook-api
+  dbCredsPath: database/creds/railbook-api
+  paymentPath: secret/data/railbook/payment
+
+kong:
+  ingressClass: kong
+  # POST /bookings only: requests per minute per client IP before Kong returns 429.
+  bookingRateLimitPerMinute: 20

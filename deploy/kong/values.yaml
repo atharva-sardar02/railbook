@@ -1,0 +1,45 @@
+# Values for the kong/ingress Helm chart (Kong Ingress Controller + Kong Gateway, DB-less).
+# Install: helm upgrade --install kong kong/ingress --version 0.24.0 -n kong --create-namespace -f deploy/kong/values.yaml
+
+# --- The controller ("brain"): watches Ingress / KongPlugin objects, pushes config to the gateway.
+controller:
+  ingressController:
+    ingressClass: kong
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { memory: 192Mi }
+
+# --- The gateway ("muscle"): the nginx-based proxy that handles traffic.
+gateway:
+  replicaCount: 1
+  image:
+    repository: kong
+    tag: "3.9"
+
+  env:
+    # DB-less: config lives in memory, rebuilt from Kubernetes objects. Git is the source of truth.
+    database: "off"
+    # Default is one worker per CPU core (12 here) — hundreds of MB for one user. One is plenty.
+    nginx_worker_processes: "1"
+    # Kong's default access log is plain nginx text without our request ID. We turn it off and
+    # use the file-log plugin instead (JSON incl. X-Request-ID, see the app chart's KongPlugins).
+    proxy_access_log: "off"
+    # The controller calls the Admin API on every sync; those lines are noise in Splunk.
+    admin_access_log: "off"
+
+  proxy:
+    # NodePort 30080 is what kind maps to 127.0.0.1:80 on your machine (deploy/kind/kind-config.yaml).
+    type: NodePort
+    http:
+      enabled: true
+      nodePort: 30080
+    tls:
+      enabled: false  # plain HTTP on localhost; TLS is out of scope
+
+  # Kong Manager (web UI) is out of scope; with DB-less mode it would be read-only anyway.
+  manager:
+    enabled: false
+
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { memory: 320Mi }

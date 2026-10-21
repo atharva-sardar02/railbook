@@ -1,0 +1,39 @@
+# Factor XII: the admin process (create tables + seed) runs as a one-off Job,
+# with the same image, environment and Vault secrets as the API.
+#
+# It is a Helm hook: Helm runs it after every install and upgrade.
+# Jobs can't be edited once created, so before-hook-creation deletes the previous
+# run's Job first. The finished Job is kept so you can inspect it (kubectl logs job/...).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: railbook-setup
+  labels:
+    {{- include "railbook.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 4
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: railbook-setup
+        {{- include "railbook.labels" . | nindent 8 }}
+      annotations:
+        # Init container only. A sidecar never exits, and a Job only completes when every
+        # container has exited — with a sidecar this Job would run forever.
+        # Its DB user isn't renewed, so Vault drops it when the 1 h lease expires.
+        {{- include "railbook.vaultAnnotations" (dict "root" . "prePopulateOnly" true) | nindent 8 }}
+    spec:
+      serviceAccountName: railbook-api
+      restartPolicy: Never
+      containers:
+        - name: setup
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "railbook.command" "python -m app.admin setup" | nindent 10 }}
+          {{- include "railbook.apiEnv" . | nindent 10 }}
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+          {{- include "railbook.apiSecurityContext" . | nindent 10 }}

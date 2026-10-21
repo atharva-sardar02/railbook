@@ -1,0 +1,16 @@
+# Local Kubernetes cluster for RailBook.
+# Port mappings can only be set when the cluster is created (Docker publishes ports
+# at container creation), so changing them means: kind delete cluster && create again.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: railbook
+nodes:
+  # One node only: every extra node is another ~1 GB container, and teaches nothing here.
+  - role: control-plane
+    extraPortMappings:
+      # Browser → 127.0.0.1:80 on your machine → port 30080 on the node → Kong proxy (NodePort).
+      # 127.0.0.1 keeps it off your Wi-Fi network.
+      - containerPort: 30080
+        hostPort: 80
+        listenAddress: "127.0.0.1"
+        protocol: TCP

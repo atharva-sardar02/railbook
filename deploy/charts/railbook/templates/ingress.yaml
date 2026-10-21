@@ -1,0 +1,55 @@
+# Two Ingresses because a Kong plugin applies to a whole route and can't say "POST only".
+# Kong picks the most specific matching route, so POST /bookings matches the second one
+# (path + method) and every other request matches the first.
+#
+# /metrics, /healthz and /readyz are deliberately NOT routed: they are for Prometheus and
+# Kubernetes inside the cluster, not for the public.
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: railbook
+  labels:
+    {{- include "railbook.labels" . | nindent 4 }}
+  annotations:
+    konghq.com/plugins: railbook-correlation-id,railbook-prometheus,railbook-file-log
+spec:
+  ingressClassName: {{ .Values.kong.ingressClass }}
+  rules:
+    - http:
+        paths:
+          {{- range list "/trains" "/bookings" "/docs" }}
+          - path: {{ . }}
+            pathType: Prefix
+            backend:
+              service:
+                name: railbook-api
+                port: { name: http }
+          {{- end }}
+          - path: /openapi.json
+            pathType: Exact
+            backend:
+              service:
+                name: railbook-api
+                port: { name: http }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: railbook-create-booking
+  labels:
+    {{- include "railbook.labels" . | nindent 4 }}
+  annotations:
+    konghq.com/methods: POST
+    konghq.com/plugins: railbook-correlation-id,railbook-prometheus,railbook-file-log,railbook-booking-rate-limit
+spec:
+  ingressClassName: {{ .Values.kong.ingressClass }}
+  rules:
+    - http:
+        paths:
+          - path: /bookings
+            pathType: Exact
+            backend:
+              service:
+                name: railbook-api
+                port: { name: http }

@@ -1,0 +1,83 @@
+# The identity Vault checks: the Vault role railbook-api only accepts this service account
+# in this namespace. Used by the API pods and the setup Job.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: railbook-api
+  labels:
+    {{- include "railbook.labels" . | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: railbook-api
+  labels:
+    {{- include "railbook.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.api.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: railbook-api
+  # Rolling update: start one new pod, wait until it is Ready, then stop one old pod.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: railbook-api
+        {{- include "railbook.labels" . | nindent 8 }}
+      annotations:
+        # Env vars are read only at startup. Changing the ConfigMap changes this hash,
+        # which changes the pod template, which makes Kubernetes roll out new pods.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        # Init container + sidecar: the sidecar renews the DB credential's lease while the pod lives.
+        {{- include "railbook.vaultAnnotations" (dict "root" . "prePopulateOnly" false) | nindent 8 }}
+    spec:
+      serviceAccountName: railbook-api
+      # Must exceed preStop (5 s) + the app's graceful shutdown (20 s), or Kubernetes force-kills.
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: api
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "railbook.command" "python -m app" | nindent 10 }}
+          {{- include "railbook.apiEnv" . | nindent 10 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.api.port }}
+          # Liveness: is the process stuck? Failing → restart. Never checks the DB.
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+            failureThreshold: 3
+          # Readiness: can it serve now? Failing → Kong stops sending traffic, no restart.
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+            failureThreshold: 2
+          lifecycle:
+            # On shutdown, Kubernetes sends SIGTERM and removes the pod from Kong at the same
+            # time. The pause lets Kong stop routing here before the app stops accepting.
+            preStop:
+              sleep:
+                seconds: 5
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+          {{- include "railbook.apiSecurityContext" . | nindent 10 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: railbook-api
+  labels:
+    {{- include "railbook.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/name: railbook-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

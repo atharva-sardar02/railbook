@@ -1,0 +1,55 @@
+# Kong plugins, attached to routes by the konghq.com/plugins annotation on the Ingresses.
+---
+# Adds X-Request-ID when the client didn't send one and returns it in the response.
+# The API reuses this header (app/main.py), so one ID links Kong's and the API's log lines.
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: railbook-correlation-id
+  labels:
+    {{- include "railbook.labels" . | nindent 4 }}
+plugin: correlation-id
+config:
+  header_name: X-Request-ID
+  generator: uuid
+  echo_downstream: true
+---
+# Gateway-level metrics per route and status code, scraped by Prometheus in block 5.
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: railbook-prometheus
+  labels:
+    {{- include "railbook.labels" . | nindent 4 }}
+plugin: prometheus
+config:
+  status_code_metrics: true
+  latency_metrics: true
+  bandwidth_metrics: false
+  upstream_health_metrics: true
+---
+# One JSON line per request on Kong's stdout, including request headers (so X-Request-ID).
+# Replaces Kong's plain-text access log, which is switched off in deploy/kong/values.yaml.
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: railbook-file-log
+  labels:
+    {{- include "railbook.labels" . | nindent 4 }}
+plugin: file-log
+config:
+  path: /dev/stdout
+---
+# Only on POST /bookings (see the second Ingress). "local" keeps counters in Kong's memory:
+# no Redis needed, exact with one gateway pod.
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: railbook-booking-rate-limit
+  labels:
+    {{- include "railbook.labels" . | nindent 4 }}
+plugin: rate-limiting
+config:
+  minute: {{ .Values.kong.bookingRateLimitPerMinute }}
+  limit_by: ip
+  policy: local
