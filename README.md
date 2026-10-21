@@ -20,3 +20,4 @@ Vault's unseal keys and root token are written to `~/.railbook/vault-init.json` 
 - [Block 1 — The booking API, explained](docs/learning/01-app.md)
 - [Block 1b — The quick frontend, explained](docs/learning/01b-frontend.md)
 - [Block 2 — kind, Kong and Vault, explained](docs/learning/02-kind-kong-vault.md)
+- [Block 3 — CI/CD, explained](docs/learning/03-ci-cd.md)
