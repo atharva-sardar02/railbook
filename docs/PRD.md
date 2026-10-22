@@ -1,6 +1,6 @@
 # RailBook — Product Requirements Document
 
-**Status:** Draft for review · **Date:** 2026-10-20 · **Timebox:** 1 day (~8 hours) · **Runs on:** your laptop only (WSL2 + kind)
+**Status:** In progress — see [STATUS.md](STATUS.md) · **Date:** 2026-10-20 · **Timebox:** 1 day (~8 hours) · **Runs on:** your laptop only (WSL2 + kind)
 
 ---
 
