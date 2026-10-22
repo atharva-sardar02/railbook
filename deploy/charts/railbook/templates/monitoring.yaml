@@ -1,0 +1,92 @@
+{{- /*
+The app's own monitoring, deployed with the app by the pipeline: what to scrape, when to alert,
+and a dashboard. The operator objects only exist if kube-prometheus-stack's CRDs are installed,
+so they are skipped otherwise (e.g. `helm lint` in CI, or a cluster without monitoring).
+*/ -}}
+{{- if .Capabilities.APIVersions.Has "monitoring.coreos.com/v1" }}
+# Scrape config: "every Service labelled app.kubernetes.io/name=railbook-api in this namespace,
+# port http, path /metrics". Prometheus scrapes each pod behind the Service separately (not
+# through the Service's load balancing), so every replica's counters are collected.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: railbook-api
+  labels:
+    release: {{ .Values.monitoring.releaseLabel }}
+    {{- include "railbook.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: railbook-api
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.monitoring.scrapeInterval }}
+---
+# Alert rules, evaluated by Prometheus every 30 s. `for` = how long the condition must hold
+# before the alert fires (avoids alerting on one bad scrape). Firing alerts go to Alertmanager.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: railbook
+  labels:
+    release: {{ .Values.monitoring.releaseLabel }}
+    {{- include "railbook.labels" . | nindent 4 }}
+spec:
+  groups:
+    - name: railbook
+      rules:
+        # `up` is set by Prometheus itself: 1 if the last scrape worked, 0 if not. If every pod
+        # is gone there are no targets and no `up` series at all, so `or vector(0)` turns
+        # "nothing" into 0 and the alert still fires.
+        - alert: RailBookApiDown
+          expr: (sum(up{namespace="{{ .Release.Namespace }}", job="railbook-api"}) or vector(0)) == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: No RailBook API pod is up
+            description: Prometheus has not scraped any RailBook API pod for 1 minute.
+
+        # Share of requests answered with 5xx. Measured in the app (http_requests_total from
+        # prometheus-fastapi-instrumentator groups codes as 2xx/4xx/5xx). 402/409 are 4xx: a
+        # failed payment or a sold-out train is a normal outcome, not an error of ours.
+        - alert: RailBookHighErrorRate
+          expr: |
+            sum(rate(http_requests_total{namespace="{{ .Release.Namespace }}", job="railbook-api", status="5xx"}[5m]))
+              /
+            sum(rate(http_requests_total{namespace="{{ .Release.Namespace }}", job="railbook-api"}[5m]))
+              > {{ .Values.monitoring.errorRateThreshold }}
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: RailBook API 5xx rate above {{ mulf .Values.monitoring.errorRateThreshold 100 }}%
+            description: '{{`{{ $value | humanizePercentage }}`}} of API requests failed with 5xx over the last 5 minutes.'
+
+        # Kong answers 429 itself when POST /bookings exceeds the rate limit; the request never
+        # reaches the API, so only Kong's metrics see it. Informational: the limit is working.
+        # exported_service: Kong labels each series with its service ("railbook.railbook-api.http"),
+        # but Prometheus already sets `service` (the scraped Kubernetes Service), so it keeps its
+        # own and renames Kong's label to exported_service.
+        - alert: RailBookBookingsRateLimited
+          expr: sum(rate(kong_http_requests_total{exported_service=~"{{ .Release.Namespace }}[.].*", code="429"}[5m])) > 0
+          labels:
+            severity: info
+          annotations:
+            summary: Kong is rate limiting RailBook bookings
+            description: 'Kong returned 429 at {{`{{ $value | humanize }}`}} requests/s over the last 5 minutes.'
+---
+# Grafana dashboard. Grafana's sidecar watches ConfigMaps labelled grafana_dashboard=1 in every
+# namespace and loads the JSON inside, so the dashboard ships (and is versioned) with the app.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: railbook-dashboard
+  labels:
+    grafana_dashboard: "1"
+    {{- include "railbook.labels" . | nindent 4 }}
+data:
+  railbook.json: |-
+    {{- .Files.Get "dashboards/railbook.json" | nindent 4 }}
+{{- end }}

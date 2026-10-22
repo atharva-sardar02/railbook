@@ -73,6 +73,8 @@ kind: Service
 metadata:
   name: railbook-api
   labels:
+    # The ServiceMonitor finds this Service by this label.
+    app.kubernetes.io/name: railbook-api
     {{- include "railbook.labels" . | nindent 4 }}
 spec:
   selector:

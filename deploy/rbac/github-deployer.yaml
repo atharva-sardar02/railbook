@@ -32,6 +32,10 @@ rules:
   - apiGroups: [configuration.konghq.com]
     resources: [kongplugins]
     verbs: [get, list, watch, create, update, patch, delete]
+  # The app's own scrape config and alerts (deploy/charts/railbook/templates/monitoring.yaml).
+  - apiGroups: [monitoring.coreos.com]
+    resources: [servicemonitors, prometheusrules]
+    verbs: [get, list, watch, create, update, patch, delete]
   # Read-only: what `helm --wait` watches, and what you need to debug a failed deploy.
   - apiGroups: [""]
     resources: [pods, pods/log, events]

@@ -14,7 +14,8 @@ config:
   generator: uuid
   echo_downstream: true
 ---
-# Gateway-level metrics per route and status code, scraped by Prometheus in block 5.
+# Gateway-level metrics per route and status code, scraped by Prometheus (Kong's
+# ServiceMonitor, deploy/kong/values.yaml). Status-code counters feed the 429 alert.
 apiVersion: configuration.konghq.com/v1
 kind: KongPlugin
 metadata:
