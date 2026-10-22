@@ -20,6 +20,9 @@ step() { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
 step "kind cluster"
 kind get clusters | grep -qx railbook || kind create cluster --config deploy/kind/kind-config.yaml
 kubectl config use-context kind-railbook >/dev/null
+# Right after `docker start`, the node's container is up but the Kubernetes API server inside it
+# needs a few seconds more. Wait for it instead of failing the first Helm call.
+timeout 120 bash -c 'until kubectl get --raw /readyz >/dev/null 2>&1; do sleep 2; done'
 
 step "Helm repositories"
 helm repo add kong https://charts.konghq.com >/dev/null 2>&1 || true
