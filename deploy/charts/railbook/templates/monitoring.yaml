@@ -69,13 +69,25 @@ spec:
         # exported_service: Kong labels each series with its service ("railbook.railbook-api.http"),
         # but Prometheus already sets `service` (the scraped Kubernetes Service), so it keeps its
         # own and renames Kong's label to exported_service.
+        #
+        # Two halves, because Kong creates the code="429" counter only at the first 429. Its first
+        # sample is already e.g. 5, so rate() sees no change and returns 0 for that first burst:
+        #   1. rate(...) > 0                  : more 429s on a counter that already existed
+        #   2. ... unless ... offset 5m       : a 429 counter that didn't exist 5 minutes ago
         - alert: RailBookBookingsRateLimited
-          expr: sum(rate(kong_http_requests_total{exported_service=~"{{ .Release.Namespace }}[.].*", code="429"}[5m])) > 0
+          expr: |
+            sum(rate(kong_http_requests_total{exported_service=~"{{ .Release.Namespace }}[.].*", code="429"}[5m])) > 0
+              or
+            sum(
+              kong_http_requests_total{exported_service=~"{{ .Release.Namespace }}[.].*", code="429"}
+                unless
+              kong_http_requests_total{exported_service=~"{{ .Release.Namespace }}[.].*", code="429"} offset 5m
+            ) > 0
           labels:
             severity: info
           annotations:
             summary: Kong is rate limiting RailBook bookings
-            description: 'Kong returned 429 at {{`{{ $value | humanize }}`}} requests/s over the last 5 minutes.'
+            description: Kong returned 429 (rate limit) on POST /bookings in the last 5 minutes.
 ---
 # Grafana dashboard. Grafana's sidecar watches ConfigMaps labelled grafana_dashboard=1 in every
 # namespace and loads the JSON inside, so the dashboard ships (and is versioned) with the app.

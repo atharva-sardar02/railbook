@@ -6,12 +6,21 @@ See [docs/PRD.md](docs/PRD.md) for requirements, design and decisions, and [docs
 
 ## Run it locally
 
-Needs Docker, kind, Helm and kubectl. Brings up kind, Kong, Vault, Postgres and the API in order:
+Needs Docker, kind, Helm and kubectl. Brings up kind, Kong, Vault, monitoring, Postgres and the API in order:
 
 ```bash
 scripts/bootstrap.sh          # safe to rerun; also re-unseals Vault after a restart
 open http://127.0.0.1/         # web frontend through Kong (API docs at /docs)
 ```
+
+| UI | URL | Login |
+|---|---|---|
+| RailBook | http://127.0.0.1/ | — |
+| Grafana | http://grafana.localhost/ (dashboard: `/d/railbook`) | `admin` / `scripts/vault-read.sh secret/monitoring/grafana admin_password` |
+| Prometheus | http://prometheus.localhost/ | — |
+| Alertmanager | http://alertmanager.localhost/ | — |
+
+All of them are published on `127.0.0.1` only.
 
 Vault's unseal keys and root token are written to `~/.railbook/vault-init.json` — keep that file safe and never commit it.
 
@@ -22,3 +31,4 @@ Vault's unseal keys and root token are written to `~/.railbook/vault-init.json` 
 - [Block 1b — The quick frontend, explained](docs/learning/01b-frontend.md)
 - [Block 2 — kind, Kong and Vault, explained](docs/learning/02-kind-kong-vault.md)
 - [Block 3 — CI/CD, explained](docs/learning/03-ci-cd.md)
+- [Block 4 — Prometheus and Grafana, explained](docs/learning/04-prometheus-grafana.md)
