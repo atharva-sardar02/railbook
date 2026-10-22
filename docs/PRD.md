@@ -102,8 +102,8 @@ No user accounts: the passenger name is a field on the booking.
 | C2 | CI | On push to `main` (GitHub-hosted): same checks, then push image to **GHCR** tagged with the git SHA. Actions pinned by commit SHA, tool images by digest, `GITHUB_TOKEN` read-only except `packages: write` in the image job. |
 | C3 | CD | On push to `main` (**self-hosted runner** `railbook-laptop`, user `ghrunner`, systemd service): `helm upgrade --install --rollback-on-failure --wait --wait-for-jobs` with that tag; setup Job; smoke test through Kong. Runs as the `github-deployer` service account (namespace `railbook` only, 24 h token). |
 | M1 | Metrics | `kube-prometheus-stack` (Prometheus, Grafana, Alertmanager) via Helm. |
-| M2 | Metrics | ServiceMonitors for the API and Kong. |
-| M3 | Metrics | One Grafana dashboard (gateway + app) and one alert rule (5xx rate). |
+| M2 | Metrics | ServiceMonitors for the API, Kong and Vault. |
+| M3 | Metrics | One Grafana dashboard (gateway + app) and alert rules: 5xx rate, API down, Vault sealed, Kong rate limiting (info). |
 | L1 | Logs | Splunk Free in Docker on your laptop, attached to the `kind` Docker network, HEC enabled. |
 | L2 | Logs | Splunk OTel Collector for Kubernetes (Helm) → Splunk HEC. Only the `railbook` and `kong` namespaces. |
 | L3 | Logs | Saved searches: errors by route, one request by `request_id`, 429s from rate limiting. |
@@ -217,7 +217,7 @@ If running late, the day runs longer — nothing is cut. Building every piece, i
   |---|---|
   | kind node (API server, etcd, kubelet…) | ~1.2 GB |
   | Splunk (container `--memory=2g`) | 2.0 GB |
-  | kube-prometheus-stack (Prometheus capped at 512 MB, 1-day retention) | ~0.9 GB |
+  | kube-prometheus-stack (Prometheus capped at 512 MB, 1-day retention; Grafana 512 MB) | ~0.9 GB (measured) |
   | Kong (proxy + controller) | ~0.3 GB |
   | Vault + injector | ~0.2 GB |
   | Postgres + API ×2 | ~0.4 GB |
@@ -341,5 +341,9 @@ If running late, the day runs longer — nothing is cut. Building every piece, i
 | 2026-10-20 | WSL memory stays at 8 GB; stack fits a memory budget (§6.1) |
 | 2026-10-20 | App follows the Twelve-Factor methodology (§3.3) |
 | 2026-10-20 | All four concepts built in full; no shortcuts |
+| 2026-10-22 | Prometheus Operator CRDs from their own chart, installed first; kube-prometheus-stack 92.0.0 in `monitoring` |
+| 2026-10-22 | Grafana admin password from Vault via `$__file{}`; no Kubernetes Secret |
+| 2026-10-22 | App's ServiceMonitor, alerts and dashboard ship in the app chart (deployed by the pipeline) |
+| 2026-10-22 | Prometheus, Grafana, Alertmanager UIs through Kong at `*.localhost` (127.0.0.1 only) |
 
 No open questions.

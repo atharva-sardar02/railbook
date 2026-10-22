@@ -31,3 +31,12 @@ kong:
   ingressClass: kong
   # POST /bookings only: requests per minute per client IP before Kong returns 429.
   bookingRateLimitPerMinute: 20
+
+# Prometheus + Grafana (kube-prometheus-stack, installed by scripts/bootstrap.sh). The chart only
+# creates these objects when the cluster has the Prometheus Operator CRDs.
+monitoring:
+  # Prometheus only picks up ServiceMonitors / PrometheusRules carrying this label.
+  releaseLabel: monitoring
+  scrapeInterval: 30s
+  # Alert when more than this share of API requests fail with a 5xx over 5 minutes.
+  errorRateThreshold: 0.05

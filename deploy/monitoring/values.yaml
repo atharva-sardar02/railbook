@@ -1,0 +1,127 @@
+# Values for the prometheus-community/kube-prometheus-stack Helm chart: Prometheus Operator,
+# Prometheus, Alertmanager, Grafana, kube-state-metrics and node-exporter.
+# Install: helm upgrade --install monitoring prometheus-community/kube-prometheus-stack --version 92.0.0 \
+#            -n monitoring --create-namespace -f deploy/monitoring/values.yaml
+#
+# How targets are found: Prometheus doesn't have a list of URLs. The operator watches
+# ServiceMonitor objects in every namespace and turns each one into scrape config. A
+# ServiceMonitor is only picked up if it carries the label `release: monitoring` (the chart's
+# default selector, from the release name). Kong, Vault and the app chart each ship their own.
+
+# The CRDs (ServiceMonitor, PrometheusRule, ...) are installed by their own chart first
+# (prometheus-operator-crds, see scripts/bootstrap.sh), because Kong and Vault create
+# ServiceMonitors before this chart is installed. Helm also never upgrades CRDs inside a chart.
+crds:
+  enabled: false
+
+# --- kind runs etcd, the scheduler, controller-manager and kube-proxy bound to localhost
+# inside the node container, so Prometheus can't reach them. Their targets would just be "down"
+# forever, and their default alerts would fire. Turning them off also removes those rules.
+kubeEtcd:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+prometheusOperator:
+  resources:
+    requests: { cpu: 25m, memory: 48Mi }
+    limits: { memory: 128Mi }
+
+prometheus:
+  ingress:
+    enabled: true
+    ingressClassName: kong
+    hosts: [prometheus.localhost]
+    paths: [/]
+  prometheusSpec:
+    # Learning setup: one day of history is enough, and keeps memory and disk small.
+    retention: 1d
+    scrapeInterval: 30s
+    evaluationInterval: 30s
+    # Used in alert links ("source") so they open in your browser.
+    externalUrl: http://prometheus.localhost/
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits: { memory: 512Mi }
+    # No storageSpec: data lives in an emptyDir and is lost when the pod restarts.
+    # With 1 day retention on a laptop that's an acceptable trade for not managing a PVC.
+
+alertmanager:
+  ingress:
+    enabled: true
+    ingressClassName: kong
+    hosts: [alertmanager.localhost]
+    paths: [/]
+  alertmanagerSpec:
+    externalUrl: http://alertmanager.localhost/
+    resources:
+      requests: { cpu: 10m, memory: 32Mi }
+      limits: { memory: 64Mi }
+  # The chart's default config routes everything to a "null" receiver: alerts are visible in
+  # the Alertmanager UI but not sent anywhere. No email/Slack on a laptop.
+
+grafana:
+  # The admin password comes from Vault, never from a Kubernetes Secret.
+  # The Vault Agent init container writes it to /vault/secrets/admin-password before Grafana
+  # starts. Grafana expands $__file{path} in any setting (env vars included) to that file's
+  # contents. (The image is distroless, so the shell-based GF_..._PASSWORD__FILE trick of older
+  # images isn't available.) With both env vars set, the chart creates no admin Secret at all.
+  env:
+    GF_SECURITY_ADMIN_USER: admin
+    GF_SECURITY_ADMIN_PASSWORD: $__file{/vault/secrets/admin-password}
+  podAnnotations:
+    vault.hashicorp.com/agent-inject: "true"
+    vault.hashicorp.com/role: grafana
+    # A static secret read once at startup: no sidecar needed, just the init container.
+    vault.hashicorp.com/agent-pre-populate-only: "true"
+    vault.hashicorp.com/agent-inject-secret-admin-password: secret/data/monitoring/grafana
+    vault.hashicorp.com/agent-inject-template-admin-password: |
+      {{- with secret "secret/data/monitoring/grafana" -}}
+      {{ .Data.data.admin_password }}
+      {{- end -}}
+
+  # The sidecars normally call Grafana's API (as admin) to reload after a change, which would
+  # need the password. Instead: datasources load once at startup (init container), and
+  # dashboards are files Grafana re-reads every 30 s by itself.
+  sidecar:
+    datasources:
+      skipReload: true
+      initDatasources: true
+      # An init container must exit before Grafana starts. WATCH (the default) never returns;
+      # LIST reads the datasource ConfigMaps once and exits.
+      watchMethod: LIST
+    dashboards:
+      skipReload: true
+      # (searchNamespace: ALL is already the chart default: dashboards are picked up from
+      #  ConfigMaps labelled grafana_dashboard=1 in any namespace, e.g. the app's.)
+
+  ingress:
+    enabled: true
+    ingressClassName: kong
+    hosts: [grafana.localhost]
+    path: /
+
+  # The chart's "helm test" pod: not used here.
+  testFramework:
+    enabled: false
+
+  # Grafana 12 needs ~250 MB just to start (it runs ~50 internal apps and DB migrations).
+  # At a 256Mi limit the Go garbage collector ran nonstop near the limit, start-up took minutes
+  # and the liveness probe killed it in a loop. 512Mi gives it headroom.
+  resources:
+    requests: { cpu: 50m, memory: 192Mi }
+    limits: { memory: 512Mi }
+
+kube-state-metrics:
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { memory: 96Mi }
+
+prometheus-node-exporter:
+  resources:
+    requests: { cpu: 10m, memory: 16Mi }
+    limits: { memory: 48Mi }

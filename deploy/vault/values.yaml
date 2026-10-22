@@ -63,3 +63,31 @@ injector:
     cpuLimit: "200m"
     memRequest: "32Mi"
     memLimit: "64Mi"
+
+# --- Monitoring (block 4). Needs the Prometheus Operator CRDs, which bootstrap.sh installs first.
+serverTelemetry:
+  # Scrapes /v1/sys/metrics?format=prometheus on the active Vault server (the `vault-active`
+  # Service). No token needed: see unauthenticated_metrics_access in the listener above.
+  serviceMonitor:
+    enabled: true
+    selectors:
+      release: monitoring   # what kube-prometheus-stack's Prometheus selects on
+    interval: 30s
+  prometheusRules:
+    enabled: true
+    selectors:
+      release: monitoring
+    rules:
+      # A sealed Vault can't hand out secrets: new pods (and DB credential renewals) fail.
+      # When sealed, the pod drops out of the vault-active Service, so there's no metric with
+      # value 1 at all. absent() turns "no such series" into an alert. Same for Vault down.
+      - alert: VaultSealedOrDown
+        expr: absent(vault_core_unsealed == 1)
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Vault is sealed or not reporting metrics
+          description: >-
+            No unsealed Vault server has reported metrics for 1 minute. New pods can't get
+            secrets. Run scripts/vault-unseal.sh (or scripts/bootstrap.sh).

@@ -43,3 +43,12 @@ gateway:
   resources:
     requests: { cpu: 100m, memory: 128Mi }
     limits: { memory: 320Mi }
+
+  # --- Monitoring (block 4). Kong serves Prometheus metrics on its status listener (port 8100,
+  # /metrics); the prometheus KongPlugin in the app chart adds per-route request counters.
+  # The ServiceMonitor needs the Prometheus Operator CRDs, which bootstrap.sh installs first.
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+    labels:
+      release: monitoring   # what kube-prometheus-stack's Prometheus selects on
