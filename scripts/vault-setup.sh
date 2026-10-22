@@ -18,15 +18,20 @@ run_in_vault() {  # $1 = shell script to run inside the pod
 
 base() {
   # Generated locally, only stored if the secret doesn't exist yet (re-runs don't rotate them).
-  local pg_admin payment_key grafana_admin
+  local pg_admin payment_key grafana_admin splunk_admin hec_token
   pg_admin=$(openssl rand -hex 24)
   payment_key="pay_test_$(openssl rand -hex 16)"
   grafana_admin=$(openssl rand -hex 16)
+  splunk_admin=$(openssl rand -hex 16)
+  # Splunk HEC tokens are GUIDs.
+  hec_token=$(python3 -c 'import uuid; print(uuid.uuid4())')
 
   run_in_vault "
 PG_ADMIN='$pg_admin'
 PAYMENT_KEY='$payment_key'
 GRAFANA_ADMIN='$grafana_admin'
+SPLUNK_ADMIN='$splunk_admin'
+HEC_TOKEN='$hec_token'
 $(cat <<'EOF'
 # --- KV v2: static secrets, versioned (every write keeps the previous version).
 vault secrets list | grep -q '^secret/' || vault secrets enable -path=secret kv-v2
@@ -36,6 +41,10 @@ vault kv get secret/railbook/payment >/dev/null 2>&1 \
   || vault kv put secret/railbook/payment api_key="$PAYMENT_KEY"
 vault kv get secret/monitoring/grafana >/dev/null 2>&1 \
   || vault kv put secret/monitoring/grafana admin_password="$GRAFANA_ADMIN"
+vault kv get secret/splunk/admin >/dev/null 2>&1 \
+  || vault kv put secret/splunk/admin password="$SPLUNK_ADMIN"
+vault kv get secret/splunk/hec >/dev/null 2>&1 \
+  || vault kv put secret/splunk/hec token="$HEC_TOKEN"
 
 # --- Kubernetes auth: pods prove who they are with their service account token.
 # Vault checks the token with the Kubernetes API (the chart grants Vault that permission).
@@ -54,6 +63,10 @@ HCL
 vault policy write grafana - <<'HCL'
 path "secret/data/monitoring/grafana" { capabilities = ["read"] }
 HCL
+# The log collector only needs the HEC token, not Splunk's admin password.
+vault policy write log-collector - <<'HCL'
+path "secret/data/splunk/hec" { capabilities = ["read"] }
+HCL
 
 # --- Roles: service account + namespace -> policies. A pod with any other account gets nothing.
 # audience: only accept tokens issued for the Kubernetes API (kind's default "aud" claim), so a
@@ -71,6 +84,10 @@ vault write auth/kubernetes/role/grafana \
   bound_service_account_names=monitoring-grafana \
   bound_service_account_namespaces=monitoring \
   audience=$AUD token_policies=grafana token_ttl=15m
+vault write auth/kubernetes/role/log-collector \
+  bound_service_account_names=otel-collector \
+  bound_service_account_namespaces=logging \
+  audience=$AUD token_policies=log-collector token_ttl=15m
 EOF
 )"
 }
