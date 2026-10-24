@@ -42,7 +42,7 @@ data:
         directory: /var/lib/otel-collector
 
     receivers:
-      filelog:
+      file_log:
         # Only our namespaces: the Splunk Free license allows 500 MB/day, and Kubernetes'
         # own components are chatty. Path pattern: /var/log/pods/<namespace>_<pod>_<uid>/<container>/N.log
         include:
@@ -51,6 +51,9 @@ data:
         # First run: read existing files from the start. After that, file_storage resumes.
         start_at: beginning
         storage: file_storage
+        # Attach each line's file path as the attribute log.file.path. The container operator
+        # below reads namespace/pod/container from it; without it every line fails to parse.
+        include_file_path: true
         operators:
           # The runtime wraps each line as "<time> <stdout|stderr> <F|P> <line>" (CRI format;
           # P = partial, a long line split in pieces). This operator unwraps it, rejoins partial
@@ -61,10 +64,12 @@ data:
 
     processors:
       # Refuse new data instead of crashing if memory gets tight (checked every second).
+      # Counts only the Go heap; the container limit (256 Mi, below) must also cover the runtime
+      # and the page cache of the log files being read, so leave a wide gap.
       memory_limiter:
         check_interval: 1s
-        limit_mib: 100
-        spike_limit_mib: 25
+        limit_mib: 160
+        spike_limit_mib: 40
       # Splunk's sourcetype tells it what kind of data an event is. One per container:
       # kube:container:api (RailBook), kube:container:proxy (Kong), kube:container:vault-agent ...
       # The HEC exporter uses the attribute com.splunk.sourcetype for it.
@@ -105,7 +110,7 @@ data:
                     port: 8888
       pipelines:
         logs:
-          receivers: [filelog]
+          receivers: [file_log]
           processors: [memory_limiter, transform/sourcetype, batch]
           exporters: [splunk_hec]
 ---
@@ -137,7 +142,7 @@ spec:
           {{- end -}}
         # Changing the config must restart the pods; bump this when editing the ConfigMap
         # (kubectl apply alone doesn't restart them).
-        railbook/config-version: "1"
+        railbook/config-version: "3"
     spec:
       serviceAccountName: otel-collector
       containers:
@@ -149,7 +154,7 @@ spec:
             # Splunk's build sizes the Go memory target from this (90 %); its default assumes
             # 512 MiB. Must match the container limit below.
             - name: SPLUNK_MEMORY_TOTAL_MIB
-              value: "128"
+              value: "256"
           ports:
             - { name: metrics, containerPort: 8888 }
             - { name: health, containerPort: 13133 }
@@ -158,8 +163,11 @@ spec:
           readinessProbe:
             httpGet: { path: /, port: health }
           resources:
-            requests: { cpu: 20m, memory: 64Mi }
-            limits: { memory: 128Mi }
+            # 128 Mi was measured too small: the working set sat at 120-125 Mi, the kernel kept
+            # reclaiming, the process stalled past the 1 s probe timeout and was restarted
+            # (losing its retry queue). Measured use with this limit: see docs/learning/05.
+            requests: { cpu: 20m, memory: 128Mi }
+            limits: { memory: 256Mi }
           # Root is needed to read the node's log files (owned by root, mode 0640), but nothing
           # else: no capabilities, no privilege escalation, read-only image filesystem.
           securityContext:
@@ -221,14 +229,41 @@ spec:
   groups:
     - name: logging
       rules:
-        # Splunk unreachable, token rejected, ... : logs pile up and eventually get dropped.
-        - alert: LogsNotReachingSplunk
-          expr: sum(rate(otelcol_exporter_send_failed_log_records_total[5m])) > 0
-          for: 5m
+        # What happens when Splunk is unreachable (measured by stopping it): each batch waits in
+        # the exporter's in-memory queue and is retried with backoff for up to 5 minutes, then
+        # dropped and counted in send_failed. So there are two moments worth an alert.
+
+        # 1. Batches are waiting: nothing lost yet, but will be in ~5 min. Normally the queue
+        #    empties within a second; 2 minutes of non-empty queue means sends keep failing.
+        - alert: LogsQueuedForSplunk
+          expr: sum(otelcol_exporter_queue_size) > 0
+          for: 2m
           labels:
             severity: warning
           annotations:
-            summary: The log collector can't deliver logs to Splunk
+            summary: Logs are waiting to be retried, Splunk is not accepting them
             description: >-
-              The collector failed to send log records to Splunk HEC for 5 minutes. Check
-              `docker ps` (is splunk running?) and `kubectl -n logging logs ds/otel-collector`.
+              The collector has had unsent batches for 2 minutes. They are dropped after 5
+              minutes of retries. Check `docker ps` (is splunk running? scripts/splunk.sh starts
+              it) and `kubectl -n logging logs ds/otel-collector`.
+
+        # 2. Logs were dropped. No `for`: one drop already means lost data.
+        #    Two halves for the same reason as RailBookBookingsRateLimited (block 4): the counter
+        #    only exists after the first drop, and rate() sees no increase in a first sample.
+        #    No _total suffix: this collector version exports counters without it.
+        - alert: LogsDroppedBeforeSplunk
+          expr: |
+            sum(rate(otelcol_exporter_send_failed_log_records[5m])) > 0
+              or
+            sum(
+              otelcol_exporter_send_failed_log_records
+                unless
+              otelcol_exporter_send_failed_log_records offset 5m
+            ) > 0
+          labels:
+            severity: critical
+          annotations:
+            summary: Log lines were dropped before reaching Splunk
+            description: >-
+              The collector dropped log records after 5 minutes of failed retries. Those lines
+              are not in Splunk and will not be resent.

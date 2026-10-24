@@ -79,8 +79,16 @@ kubectl apply -f deploy/rbac/github-deployer.yaml >/dev/null
 helm upgrade --install railbook deploy/charts/railbook -n railbook \
   --set image.tag="$IMAGE_TAG" --rollback-on-failure --wait --wait-for-jobs --timeout 5m
 
+step "Log collector (pod logs → Splunk)"
+# After Vault (its init container fetches the HEC token, role log-collector) and the monitoring
+# CRDs (ServiceMonitor, PrometheusRule). Splunk itself runs outside the cluster: scripts/splunk.sh.
+# If Splunk isn't up yet, the collector starts anyway and retries; LogsQueuedForSplunk fires.
+kubectl apply -f deploy/logging/otel-collector.yaml >/dev/null
+kubectl rollout status -n logging ds/otel-collector --timeout=3m
+
 step "Ready"
 echo "Frontend through Kong: http://127.0.0.1/  (API docs: /docs)"
 echo "Grafana:      http://grafana.localhost/  (admin / scripts/vault-read.sh secret/monitoring/grafana admin_password)"
 echo "Prometheus:   http://prometheus.localhost/"
 echo "Alertmanager: http://alertmanager.localhost/"
+echo "Splunk:       http://127.0.0.1:8000/  (start it with scripts/splunk.sh; login if asked: admin / scripts/vault-read.sh secret/splunk/admin password)"

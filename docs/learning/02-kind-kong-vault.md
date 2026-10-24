@@ -184,6 +184,31 @@ policy railbook-api: may read the payment key + DB creds. Nothing else.
 
 No password needed to get the first password — the pod's identity *is* the credential.
 
+**Step by step:**
+
+- **Before anything happens:** Kubernetes gives every pod an identity, its **service account** (here `railbook-api`). It also mounts a **service account token** inside the pod. The token is a JWT saying "I am `railbook-api` in namespace `railbook`". Kubernetes signs it, so nobody can forge it, and it expires after a short time.
+1. **The pod sends its token to Vault.** Vault Agent in the pod is saying "here's my ID card, log me in".
+2. **Vault asks Kubernetes whether the token is real.** Vault doesn't trust the token blindly. It sends it to the Kubernetes API's **TokenReview** endpoint, a "verify this ID" service. Kubernetes checks the signature and expiry and answers either "valid: service account `railbook-api`, namespace `railbook`" or "invalid".
+3. **Vault matches the identity to a role.** `scripts/vault-setup.sh` created the Vault **role** `railbook-api`: "accept **only** service account `railbook-api` from namespace `railbook`". A pod with any other service account or namespace is refused, even if its token is valid.
+4. **The role decides the policy.** The role is linked to the **policy** `railbook-api`, the list of paths it may use: read the payment API key (KV) and request database credentials. Vault returns a short-lived **Vault token** limited to that policy. Anything else (the Grafana password, the Splunk HEC token) gets "permission denied".
+
+Vault Agent then uses that Vault token to fetch the secrets and writes them as files in `/vault/secrets/`, where the app reads them (next section).
+
+**Analogy — the badge office at a building:**
+
+| Vault concept | Badge office |
+|---|---|
+| Service account token | Your employee ID card, issued by HR (Kubernetes) |
+| TokenReview | Security phones HR: "is this card real?" |
+| Role | "Staff of the Bookings department, in the Railbook office, may enter" |
+| Policy | The badge you're given: it opens only the payment-key room and the database room |
+
+**Why it's designed this way:**
+
+- **Pods need no secret of their own.** Their identity comes from the platform they run on, so no password is baked into an image, an env var or git. (The only "secret zero" is the unseal keys above, held by a human.)
+- **Least privilege.** Each pod gets only what its policy allows. If the API is hacked, the attacker still can't read Grafana's or Splunk's secrets.
+- **Short-lived.** Both the Kubernetes token and the Vault token expire, so a stolen one stops working soon.
+
 ### The Agent Injector
 
 You don't write Vault code in the app. You add **annotations** to the pod; a Kubernetes **mutating webhook** rewrites the pod as it's created:
