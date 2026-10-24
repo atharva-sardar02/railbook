@@ -105,7 +105,7 @@ No user accounts: the passenger name is a field on the booking.
 | M2 | Metrics | ServiceMonitors for the API, Kong and Vault. |
 | M3 | Metrics | One Grafana dashboard (gateway + app) and alert rules: 5xx rate, API down, Vault sealed, Kong rate limiting (info). |
 | L1 | Logs | Splunk Free in Docker on your laptop, attached to the `kind` Docker network, HEC enabled. |
-| L2 | Logs | Splunk OTel Collector for Kubernetes (Helm) → Splunk HEC. Only the `railbook` and `kong` namespaces. |
+| L2 | Logs | Splunk OTel Collector as a hand-written DaemonSet (`deploy/logging/otel-collector.yaml`) → Splunk HEC; HEC token from Vault as a file, no Kubernetes Secret. Only the `railbook` and `kong` namespaces. Its own metrics and alerts (logs queued, logs dropped) in Prometheus. |
 | L3 | Logs | Saved searches: errors by route, one request by `request_id`, 429s from rate limiting. |
 | V1 | Secrets | Vault server with persistent Raft storage (Helm, 1 replica), initialised and unsealed by `scripts/vault-unseal.sh` (5 key shares, threshold 3; keys in `~/.railbook/`, outside the repo). Kubernetes auth method, Agent Injector. |
 | V2 | Secrets | Vault database secrets engine → a unique, short-lived Postgres user per API pod (1 h lease, renewed by the agent sidecar, 24 h max). |
@@ -147,7 +147,7 @@ No user accounts: the passenger name is a field on the booking.
 | CI | GitHub Actions on GitHub-hosted runners | PRs and `main`. |
 | CD | GitHub Actions **self-hosted runner** in WSL | `main` only. |
 | Metrics | `kube-prometheus-stack` | |
-| Logs | Splunk Enterprise (Free license) in Docker + Splunk OTel Collector for Kubernetes | Splunk lives outside kind, so rebuilding the cluster keeps logs. |
+| Logs | Splunk Enterprise 10.6.0 (Free license) in Docker + Splunk OTel Collector 0.161.0 (hand-written DaemonSet) | Splunk lives outside kind, so rebuilding the cluster keeps logs. Not the collector's Helm chart: it always takes the HEC token from a Kubernetes Secret. |
 | Secrets | **HashiCorp Vault** 2.0 (chart 0.34.1), persistent Raft storage + Agent Injector | Runs in kind; manual unseal by script after restarts. |
 | Security scans | gitleaks, Trivy | |
 
@@ -221,7 +221,7 @@ If running late, the day runs longer — nothing is cut. Building every piece, i
   | Kong (proxy + controller) | ~0.3 GB |
   | Vault + injector | ~0.2 GB |
   | Postgres + API ×2 | ~0.4 GB |
-  | Splunk OTel Collector (agent only, cluster receiver off) | ~0.2 GB |
+  | Splunk OTel Collector (one DaemonSet pod, 256 MiB limit) | ~0.2 GB (measured) |
   | Self-hosted runner | ~0.2 GB |
   | **Total** | **~5.4 GB**, leaving ~2.5 GB for WSL, Docker and image builds |
 
@@ -269,7 +269,7 @@ If running late, the day runs longer — nothing is cut. Building every piece, i
 - **Networking.** Run Splunk with `--network kind` so the kind node can reach it by container name (`splunk:8088`). Splunk then lives outside the cluster, so `kind delete cluster` doesn't lose logs or saved searches.
 - **500 MB/day cap.** Filter the collector to the `railbook` and `kong` namespaces. Going over the cap repeatedly blocks search on the Free license.
 - **Web UI exposure.** Splunk Free has no login. Publish port 8000 on `127.0.0.1` only.
-- **TLS.** HEC uses a self-signed certificate by default. Set the collector's `insecureSkipVerify: true` — acceptable on a single machine.
+- **TLS.** HEC uses a self-signed certificate by default. Set the collector's `tls.insecure_skip_verify: true` — acceptable on a single machine.
 - **Persistence.** Mount Docker volumes for `/opt/splunk/var` and `/opt/splunk/etc`.
 
 ### 6.6 CI/CD with a self-hosted runner on a public repo
@@ -345,5 +345,7 @@ If running late, the day runs longer — nothing is cut. Building every piece, i
 | 2026-10-22 | Grafana admin password from Vault via `$__file{}`; no Kubernetes Secret |
 | 2026-10-22 | App's ServiceMonitor, alerts and dashboard ship in the app chart (deployed by the pipeline) |
 | 2026-10-22 | Prometheus, Grafana, Alertmanager UIs through Kong at `*.localhost` (127.0.0.1 only) |
+| 2026-10-22 | Log collector written by hand as a DaemonSet instead of the Splunk OTel Collector Helm chart, so the HEC token comes from Vault as a file (`${file:}`), not a Kubernetes Secret (changes L2) |
+| 2026-10-24 | Two pipeline alerts: `LogsQueuedForSplunk` (warning, before loss) and `LogsDroppedBeforeSplunk` (critical, after the 5-minute retry window) |
 
 No open questions.

@@ -1,0 +1,4 @@
+# Share everything in this app with all apps (so the searches show up under Search & Reporting).
+[]
+access = read : [ * ], write : [ admin ]
+export = system

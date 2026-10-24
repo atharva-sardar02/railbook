@@ -17,7 +17,7 @@ RailBook is a small train-ticket website. Think of it as a railway station:
 | The ledger book | **Postgres** | Where trains, seats and bookings are written down permanently. |
 | The safe | **Vault** | Holds every password and key. Clerks get a temporary key each morning; nobody keeps passwords in their pocket (or in the code). |
 | The station's dashboard and alarm bells | **Prometheus, Grafana, Alertmanager** | Count everything (bookings, errors, speed), draw it as charts, and ring an alarm when something goes wrong. |
-| The CCTV archive | **Splunk** (block 5, not built yet) | Keeps every log line so you can search what happened, e.g. one request by its ticket number. |
+| The CCTV archive | **Splunk** + the **log collector** | The collector picks up every log line written in the station and carries it to the archive; Splunk keeps it so you can search what happened, e.g. one request by its ticket number. |
 | The building contractor | **GitHub Actions + the runner on your laptop** | When new code is approved, checks it, packages it and swaps it in without closing the station. |
 | The building itself | **kind** (Kubernetes in Docker) | The "mini data centre" on your laptop that runs all of the above and restarts anything that falls over. |
 
@@ -43,6 +43,7 @@ reachable from inside the cluster, which is the point: only Kong's door is opene
 | http://grafana.localhost/ | Dashboards (charts) | `admin` + password from `scripts/vault-read.sh secret/monitoring/grafana admin_password` |
 | http://prometheus.localhost/ | Raw metrics, queries, alert rules, scrape targets | none |
 | http://alertmanager.localhost/ | Alerts currently firing | none |
+| http://127.0.0.1:8000/ | Splunk: search the logs (start it with `scripts/splunk.sh`) | Free license has authentication off; if a login page appears: `admin` + `scripts/vault-read.sh secret/splunk/admin password` |
 
 All five go through the same door (port 80) and Kong decides by the name you typed which
 service answers. Browsers know `*.localhost` means your own machine. (Old `curl` versions don't:
@@ -73,7 +74,8 @@ use `curl -H 'Host: grafana.localhost' http://127.0.0.1/`.)
 | Kubernetes API server | The cluster's control panel; `kubectl` and Helm talk to it | `kube-system` | 6443 | Yes, a random port on `127.0.0.1` (see `kubectl cluster-info`) |
 | CoreDNS | The cluster's phone book: turns names like `railbook-postgres` into addresses | `kube-system` | 53 (DNS), 9153 (metrics) | No |
 | **GitHub runner** | Waits for "deploy" jobs from GitHub and runs them on your laptop | (systemd service, user `ghrunner`) | none: it only calls out to GitHub on 443 | — |
-| **Splunk** (block 5, planned) | Log search | (Docker, next to kind) | 8000 (web UI), 8088 (HEC: receives logs) | Planned: web UI on `127.0.0.1` |
+| **Splunk** | Log storage and search | (Docker container `splunk`, on the `kind` network, outside the cluster) | **8000** (web UI), **8088** (HEC: receives logs), 8089 (management API), 8191 (internal KV store) | Web UI only: `127.0.0.1:8000`. HEC only from the cluster as `https://splunk:8088`; 8089/8191 inside the container only |
+| **Log collector** (OTel Collector) | Reads every `railbook` and `kong` pod's log files on the node and sends them to Splunk | `logging` | 8888 (its own metrics), 13133 (health) | No |
 
 ### How one booking travels
 
@@ -175,4 +177,10 @@ A methodology for cloud-ready apps. Key factors used in RailBook:
 - **Alertmanager:** receives firing alerts, then groups, silences and routes them.
 - **Grafana:** dashboards on top of Prometheus. Dashboards ship as ConfigMaps labelled `grafana_dashboard=1`.
 - **kube-prometheus-stack:** one Helm chart bundling the Operator, Prometheus, Alertmanager, Grafana, kube-state-metrics (object state) and node-exporter (machine stats).
-- **Splunk (block 5):** log indexing and search. **HEC (HTTP Event Collector)** receives logs over HTTP. The **OpenTelemetry Collector** ships container logs to it.
+- **Splunk:** log indexing and search. **HEC (HTTP Event Collector)** receives logs over HTTP. The **OpenTelemetry Collector** ships container logs to it.
+- **Sourcetype / index:** Splunk's "what kind of data" label (ours: `kube:container:<container>`) and the store it's kept in (`main`). **SPL** is Splunk's search language.
+- **Saved search:** a named SPL query, kept in git as a Splunk app (`deploy/splunk/railbook`).
+- **OTel Collector pipeline:** receivers (read data) → processors (change it) → exporters (send it). Ours: `file_log` → `memory_limiter`, `transform`, `batch` → `splunk_hec`.
+- **DaemonSet:** runs exactly one copy of a pod on every node; the usual shape for anything that reads node-local files such as logs.
+- **hostPath:** mounts a directory of the node itself into a pod (here `/var/log/pods`, read-only).
+- **Checkpoint / at-least-once:** the collector remembers how far it has read each file, so a restart neither skips nor re-sends lines, except a small window if it's killed mid-send. So duplicates are possible; lines are lost only if Splunk stays unreachable longer than the 5-minute retry window, or the collector restarts while batches are still queued in memory.

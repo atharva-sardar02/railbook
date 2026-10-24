@@ -40,6 +40,13 @@ metadata:
 plugin: file-log
 config:
   path: /dev/stdout
+  # Drop Kong's copies of the whole route and service definitions from every line (~3 KB):
+  # they're the same on every request, eat into Splunk Free's 500 MB/day, and push fields like
+  # response.status past the 5,000 characters Splunk's automatic JSON extraction looks at.
+  # A Lua snippet returning nil removes the field.
+  custom_fields_by_lua:
+    route: "return nil"
+    service: "return nil"
 ---
 # Only on POST /bookings (see the second Ingress). "local" keeps counters in Kong's memory:
 # no Redis needed, exact with one gateway pod.
