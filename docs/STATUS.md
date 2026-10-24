@@ -1,6 +1,6 @@
 # RailBook — Status
 
-**As of 2026-10-24.** Block 5 done (in review); block 6 (verify) is next.
+**As of 2026-10-24.** All blocks done. Verification results: [06-verify](learning/06-verify.md).
 
 ## Progress
 
@@ -12,8 +12,8 @@
 | 2 | kind + Kong + Vault (all secrets from Vault) | Done | [02-kind-kong-vault](learning/02-kind-kong-vault.md) |
 | 3 | CI/CD: GitHub Actions → GHCR → self-hosted runner → kind | Done | [03-ci-cd](learning/03-ci-cd.md) |
 | 4 | Prometheus + Grafana + Alertmanager | Done | [04-prometheus-grafana](learning/04-prometheus-grafana.md) |
-| 5 | Splunk + log collector | Done (PR) | [05-splunk](learning/05-splunk.md) |
-| 6 | Verify "done when" + Twelve-Factor checklist | **Next** | |
+| 5 | Splunk + log collector | Done | [05-splunk](learning/05-splunk.md) |
+| 6 | Verify "done when" + Twelve-Factor checklist | Done | [06-verify](learning/06-verify.md): 6/6 done-when; 11/12 factors in full, X in part (known gap) |
 
 Plain-language overview of every service and port: [00-glossary](learning/00-glossary.md).
 
