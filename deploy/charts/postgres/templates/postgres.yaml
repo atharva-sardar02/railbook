@@ -25,6 +25,8 @@ data:
   # users while running, like Keycloak). Name and password come from Vault as env vars, never
   # from this ConfigMap. psql's :"x" / :'x' quote them as identifier / string (no SQL injection).
   # Not executable, so docker-entrypoint.sh sources it and it sees the exported env.
+  # Since Postgres 15 only the owner of the public schema may create tables in it. Its owner
+  # is already pg_database_owner (= the database owner); ALTER SCHEMA just makes that explicit.
   02-app-user.sh: |
     psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
       -v user="$APP_DB_USER" -v pw="$APP_DB_PASSWORD" -v db="$POSTGRES_DB" <<'SQL'
