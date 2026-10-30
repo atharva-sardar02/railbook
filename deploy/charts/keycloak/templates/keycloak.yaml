@@ -1,0 +1,158 @@
+# Keycloak: logs users in and signs their tokens. One replica, its own Postgres, secrets from Vault.
+---
+# The identity Vault checks: the Vault role keycloak only accepts this service account.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: keycloak
+---
+# The realm as code. Imported on start (--import-realm) only if the realm doesn't exist yet;
+# after that the database is the source of truth. ${TEST_USER_*} are filled in from env vars
+# by Keycloak during the import, so no password is in git.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-realm
+data:
+  railbook-realm.json: |
+{{ .Files.Get "files/railbook-realm.json" | indent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+spec:
+  selector:
+    app.kubernetes.io/name: keycloak
+  ports:
+    - name: http          # login pages, tokens, JWKS; routed by Kong
+      port: 8080
+      targetPort: http
+    - name: management    # /health/* and /metrics; cluster only, never routed by Kong
+      port: 9000
+      targetPort: management
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+spec:
+  replicas: 1
+  # Recreate: stop the old pod before starting the new one. Two Keycloaks at once would need
+  # 2 GiB and, with local caches, wouldn't share login sessions. Cost: login is down for about
+  # a minute during an upgrade (the API keeps checking tokens with its cached keys).
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: keycloak
+        # Opt-in for the Vault Agent Injector webhook (deploy/vault/values.yaml: objectSelector).
+        vault-agent-inject: "true"
+      annotations:
+        # Roll the pod when the realm file changes (the import still skips an existing realm).
+        checksum/realm: {{ .Files.Get "files/railbook-realm.json" | sha256sum }}
+        vault.hashicorp.com/agent-inject: "true"
+        # Init container only: these secrets are read once at start and never rotate.
+        vault.hashicorp.com/agent-pre-populate-only: "true"
+        vault.hashicorp.com/role: {{ .Values.vault.role | quote }}
+        vault.hashicorp.com/agent-inject-secret-keycloak.env: {{ .Values.vault.dbPath | quote }}
+        vault.hashicorp.com/agent-inject-template-keycloak.env: |
+          {{`{{- with secret "`}}{{ .Values.vault.dbPath }}{{`" }}`}}
+          export KC_DB_USERNAME="{{`{{ .Data.data.username }}`}}"
+          export KC_DB_PASSWORD="{{`{{ .Data.data.password }}`}}"
+          {{`{{- end }}`}}
+          {{`{{- with secret "`}}{{ .Values.vault.adminPath }}{{`" }}`}}
+          export KC_BOOTSTRAP_ADMIN_USERNAME="{{`{{ .Data.data.username }}`}}"
+          export KC_BOOTSTRAP_ADMIN_PASSWORD="{{`{{ .Data.data.password }}`}}"
+          {{`{{- end }}`}}
+          {{`{{- with secret "`}}{{ .Values.vault.testUsersPath }}{{`" }}`}}
+          export TEST_USER_ALICE_PASSWORD="{{`{{ .Data.data.alice }}`}}"
+          export TEST_USER_BOB_PASSWORD="{{`{{ .Data.data.bob }}`}}"
+          export TEST_USER_RAILADMIN_PASSWORD="{{`{{ .Data.data.railadmin }}`}}"
+          {{`{{- end }}`}}
+    spec:
+      serviceAccountName: keycloak
+      containers:
+        - name: keycloak
+          image: {{ .Values.image }}
+          # Load the Vault-rendered env file, then start Keycloak. exec: Keycloak gets SIGTERM.
+          # "start" is production mode (start-dev would use an in-memory H2 DB and no checks).
+          command: ["/bin/bash", "-c", ". /vault/secrets/keycloak.env && exec /opt/keycloak/bin/kc.sh start --import-realm"]
+          env:
+            - name: KC_DB
+              value: postgres
+            - name: KC_DB_URL_HOST
+              value: {{ .Values.db.host | quote }}
+            - name: KC_DB_URL_DATABASE
+              value: {{ .Values.db.database | quote }}
+            # Full URL, so tokens say iss=http://auth.localhost/realms/railbook.
+            - name: KC_HOSTNAME
+              value: "http://{{ .Values.hostname }}"
+            # No TLS on this laptop setup: Kong and Keycloak talk plain HTTP inside the cluster.
+            - name: KC_HTTP_ENABLED
+              value: "true"
+            # Trust Kong's X-Forwarded-* headers to learn the client's real address and scheme.
+            - name: KC_PROXY_HEADERS
+              value: xforwarded
+            # Single replica: keep caches in this pod, no cluster discovery between pods.
+            - name: KC_CACHE
+              value: local
+            - name: KC_HEALTH_ENABLED
+              value: "true"
+            - name: KC_METRICS_ENABLED
+              value: "true"
+            # One JSON object per line, like the API, so Splunk gets fields, not free text.
+            - name: KC_LOG_CONSOLE_OUTPUT
+              value: json
+            - name: JAVA_OPTS_KC_HEAP
+              value: "-XX:MaxRAMPercentage={{ .Values.heapPercent }} -XX:InitialRAMPercentage=25"
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: management
+              containerPort: 9000
+          # First start creates ~90 tables and imports the realm: allow up to 5 min.
+          startupProbe:
+            httpGet: { path: /health/started, port: management }
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: { path: /health/ready, port: management }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health/live, port: management }
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: realm
+              mountPath: /opt/keycloak/data/import
+              readOnly: true
+      volumes:
+        - name: realm
+          configMap:
+            name: keycloak-realm
+---
+# http://auth.localhost/ through Kong. Browsers resolve *.localhost to 127.0.0.1 by themselves.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: keycloak
+spec:
+  ingressClassName: {{ .Values.kong.ingressClass }}
+  rules:
+    - host: {{ .Values.hostname | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: keycloak
+                port: { name: http }

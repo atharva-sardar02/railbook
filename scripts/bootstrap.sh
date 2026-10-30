@@ -68,6 +68,10 @@ step "Keycloak's Postgres (passwords from Vault)"
 helm upgrade --install keycloak-postgres deploy/charts/postgres \
   -n keycloak --create-namespace -f deploy/keycloak/postgres-values.yaml --wait --timeout 5m
 
+step "Keycloak (login + tokens; realm imported on first start)"
+# Before the app: the API fetches Keycloak's public keys to check tokens.
+helm upgrade --install keycloak deploy/charts/keycloak -n keycloak --wait --timeout 9m
+
 if [ -z "$IMAGE_TAG" ]; then
   # Local build. Tag = the image's content hash, so new code => new tag => Helm sees a change
   # and rolls the pods. A fixed tag like "dev" would never change, so `helm upgrade` would
@@ -95,6 +99,7 @@ kubectl rollout status -n logging ds/otel-collector --timeout=3m
 step "Ready"
 echo "Frontend through Kong: http://127.0.0.1/  (API docs: /docs)"
 echo "Grafana:      http://grafana.localhost/  (admin / scripts/vault-read.sh secret/monitoring/grafana admin_password)"
+echo "Keycloak:     http://auth.localhost/admin/  (admin / scripts/vault-read.sh secret/keycloak/admin password; test users: secret/keycloak/test-users)"
 echo "Prometheus:   http://prometheus.localhost/"
 echo "Alertmanager: http://alertmanager.localhost/"
 echo "Splunk:       http://127.0.0.1:8000/  (start it with scripts/splunk.sh; login if asked: admin / scripts/vault-read.sh secret/splunk/admin password)"
