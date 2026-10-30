@@ -226,7 +226,7 @@ Vault holds the Postgres admin login. When a pod reads `database/creds/railbook-
 CREATE ROLE "v-kubernet-railbook-3AkA…" WITH LOGIN PASSWORD '…' VALID UNTIL '…' IN ROLE railbook_owner;
 ```
 
-and returns that username/password, with a **lease** (1 h). The sidecar renews it up to `max_ttl` (24 h). When a lease expires or is revoked, Vault runs the revocation SQL (kill its connections, `DROP ROLE`). A leaked password works for one pod, for a limited time.
+and returns that username/password, with a **lease** (1 h). The sidecar renews it up to `max_ttl` (24 h), then gets a new user and rewrites `/vault/secrets/db.json`; the app reads that file on every new connection (`app/db.py`), so it switches without a restart. When a lease expires or is revoked, Vault runs the revocation SQL (kill its connections, `DROP ROLE`). A leaked password works for one pod, for a limited time.
 
 ---
 
@@ -243,6 +243,13 @@ and returns that username/password, with a **lease** (1 h). The sidecar renews i
 | `service_registration "kubernetes"` | Vault labels its own pod with its state (sealed/active) — visible in `kubectl get pod --show-labels`. |
 | `ui.enabled: true` | Web UI on a ClusterIP Service; reach it with `kubectl port-forward`, never public. |
 | `injector.agentDefaults` | The chart's defaults (250m CPU, 64–128 Mi per sidecar) are production-sized. |
+| `injector.webhook.failurePolicy: Fail` | If the API server can't call the injector, refuse the pod; its controller retries later. The default, `Ignore`, created pods **without** Vault containers, which then crash-looped (bug fixed 2026-10-29). |
+| `injector.webhook.objectSelector` (label `vault-agent-inject: "true"`) | Fail closed only for pods that need Vault, so a broken injector can't block kube-system, Kong or Prometheus. Every injected workload sets this label in its pod template. |
+| `injector.affinity: ""` | The chart forbids two injector pods on one node; with one node, `kubectl rollout restart` could never start the replacement. |
+
+### `scripts/vault-injector-check.sh`
+
+Run by `bootstrap.sh` after the injector is up. The injector makes its own TLS certificate and writes its CA into the webhook config (`caBundle`). The script connects to the injector, checks the served certificate against that `caBundle` (and that it's valid for at least another hour), and restarts the injector if not. The injector also repairs a wrong `caBundle` by itself when it can reach the API server: a CA patched in by hand was replaced within seconds.
 
 ### `scripts/vault-unseal.sh`
 
@@ -389,6 +396,10 @@ Every step is idempotent (`helm upgrade --install`, "only if missing" checks), s
 | `export … export …` on one line (caught before deploy) | `{{-` trims the newline *before* it | Move trim markers: `{{ with … -}}` / `{{ end -}}` | Go template whitespace control is easy to get wrong; always look at the rendered file. |
 | Helm upgrade of Vault failed: conflict on `caBundle` | Helm 4 uses server-side apply; the injector writes its own CA into the webhook at runtime → two owners of one field | `--server-side=false` for the Vault release | Server-side apply tracks field ownership; controllers that patch their own config conflict with it. `--force-conflicts` would have blanked the CA and broken injection. |
 | First version used Kubernetes Secrets | A temporary step before Vault | Replaced by Vault (your rule: all secrets from Vault) | "Temporary" secrets tend to stay; going straight to Vault avoided that. |
+| API returned 503 about 1 h after every pod start (found 2026-10-25) | Init container and sidecar each read `database/creds/railbook-api` → **two** DB users per pod. The app used the init's; only the sidecar's lease was renewed, so Vault dropped the app's user at 1 h | `agent-cache-enable` (sidecar reuses the init's lease) + DB user read from `db.json` per connection | Each `read` of a dynamic secret creates a new one. Check *which* user the app actually uses (`pg_stat_activity`) against the file the sidecar renews. Test with short TTLs (2 min / 6 min) so an hour happens in minutes. |
+| New pods sometimes had no Vault containers and crash-looped | Webhook `failurePolicy: Ignore`: when the API server couldn't call the injector, it created the pod unchanged | `failurePolicy: Fail` + opt-in label | Fail closed for security-relevant webhooks, but scope them so they can't block the whole cluster. |
+| After `Fail`, a refused pod took ~5½ min to appear once the injector was back | The ReplicaSet controller backs off exponentially after failed creates (17 tries in 10 s, then minutes) | Nothing; or `kubectl rollout restart` to retry at once | Controllers retry, but with growing delays. |
+| First Vault upgrade with `affinity: ""`: new injector pod stuck `Pending` | The **old** pod's anti-affinity also blocks newcomers next to it | Delete the old injector pod once | Anti-affinity is enforced from both sides. |
 
 ---
 
@@ -398,6 +409,12 @@ Every step is idempotent (`helm upgrade --install`, "only if missing" checks), s
 # What did the injector add to an API pod?
 kubectl get pod -n railbook -l app.kubernetes.io/name=railbook-api \
   -o jsonpath='{.items[0].spec.initContainers[*].name} | {.items[0].spec.containers[*].name}{"\n"}'
+
+# Which DB user does the API's file hold now? (it should match what Postgres shows below)
+kubectl exec -n railbook deploy/railbook-api -c api -- cat /vault/secrets/db.json; echo
+
+# Is the injector's TLS trusted by the API server? (restarts it if not)
+scripts/vault-injector-check.sh
 
 # Which Vault-made users are connected to Postgres right now?
 kubectl exec -n railbook railbook-postgres-0 -c postgres -- \

@@ -228,6 +228,7 @@ Since `main` deploys automatically, **merging is deploying** — which is why Cl
 | `tar: Permission denied` | Download in *your* private temp dir; `tar` ran as ghrunner | Extract as root, then `chown -R ghrunner` | Each command runs as *some* user — check what that user can read. |
 | (Caught before running) `cd` into ghrunner's 750 dir as you | Same class of bug | Run the whole step inside `sudo bash -c` | After one permission bug, audit every `sudo`/`cd` line. |
 | Runner showed `offline` | Status checked 10 ms after start | Seconds later: `online`, picked up the queued deploy | Queued jobs wait for a matching runner; nothing is lost. |
+| Deploy of PR #6 (docs only) failed, 2026-10-29 | `bootstrap.sh` had already made the Vault webhook require a pod label that `main`'s chart didn't add yet (it came with PR #7) → new pod without Vault containers, never Ready | Nothing to fix: `--rollback-on-failure` restored the previous revision and `maxUnavailable: 0` kept the old pods serving. PR #7 deployed fine. | The pipeline deploys only the app chart; infrastructure changes come from `bootstrap.sh` on whatever branch you're on. Keep the two in step, or merge the matching app change right away. |
 
 ---
 

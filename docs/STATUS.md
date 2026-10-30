@@ -1,7 +1,11 @@
 # RailBook — Status
 
 **As of 2026-10-29.** All blocks done. Verification results: [06-verify](learning/06-verify.md).
-Bugs found after block 6 and fixed: [below](#bugs-found-after-block-6).
+Bugs found after block 6 are fixed, merged (PR #7) and deployed by the pipeline: [below](#bugs-found-after-block-6).
+
+**Running now:** Helm revision 28, image `ghcr.io/atharva-sardar02/railbook:b527302…` (merge of PR #7).
+**Next:** authentication with Keycloak (OIDC); design chosen, not built — [below](#next-authentication).
+**Still open:** Alertmanager has no receiver, so alerts fire but notify nobody.
 
 ## Progress
 
@@ -30,6 +34,31 @@ Found while using the running system (2026-10-25/26), fixed 2026-10-29.
 | `RailBookApiDown` didn't fire while the site returned 503 | Prometheus still scrapes pods that are alive but not Ready, so `up` stayed 1 | Also fires when kube-state-metrics shows 0 available (Ready) replicas | All DB leases revoked in Vault: pods alive but not Ready, site 503; alert pending after ~1.5 min, firing at 2.5 min |
 | Docs: unclear whether Splunk Free has a login | The web UI shows a login form, which looked like authentication | Checked: the form accepts any password, even an empty one, and the management API accepts any credentials. Docs say so (05-splunk, glossary, PRD). | Wrong and empty passwords both opened the search app |
 
+### Deploying the fixes: what happened
+
+| Merge | Pipeline deploy | Why |
+|---|---|---|
+| PR #6 (docs only, 365297e) | **Failed**, Helm rolled back by itself (revision 26 failed → 27 = rollback to 25); site stayed 200 | The webhook on the cluster (changed by `bootstrap.sh`) already required the `vault-agent-inject` label, but `main`'s chart didn't add it yet. The new pod got no Vault containers and crash-looped; `maxUnavailable: 0` kept the old pods serving. |
+| PR #7 (b527302) | Succeeded, revision 28; 0 failed requests during the rollout | Chart now carries the label. Both pods run the GHCR image and use their `db.json` DB user. |
+
+Lesson: the pipeline deploys only the app chart. Vault, monitoring, Postgres and the collector
+are changed by `bootstrap.sh` from whatever branch you're on. If such a change needs a matching
+app-chart change, the cluster is out of step with `main` until that merge. Merge it right away,
+or change the infrastructure only after the app side is on `main`.
+
+## Next: authentication
+
+Chosen 2026-10-29, not built yet:
+
+- **Keycloak** in kind as the identity provider (realm `railbook`, client `railbook-web`), reached
+  through Kong at `auth.localhost`; its admin and database passwords from Vault.
+- The frontend logs in with **OIDC Authorization Code + PKCE** and sends `Authorization: Bearer <JWT>`.
+- The **API checks the JWT itself** (signature against Keycloak's public keys (JWKS), `iss`, `aud`, `exp`)
+  and stores `sub` as the booking's owner. `/stations` and `/trains` stay public; creating, viewing
+  and cancelling bookings need a token, and only the owner may see or cancel a booking (401 / 403).
+- Not Kong's auth plugins: Kong OSS has no OIDC plugin, and its `jwt` plugin can't fetch rotating keys.
+- Memory: Keycloak needs ~0.5–0.7 GB; check the budget (PRD §6.1) before installing.
+
 ## Resuming a session
 
 The cluster lives in Docker Desktop. After a restart the containers are stopped, Vault comes
@@ -39,7 +68,7 @@ back **sealed**, and the runner's deploy token expires after 24 h.
 # 1. Start Docker Desktop (Windows), then in WSL:
 cd /mnt/d/projects/irctc-booking
 docker start railbook-control-plane railbook-test-pg
-scripts/bootstrap.sh                      # waits for Kubernetes, re-unseals Vault, repairs anything missing
+scripts/bootstrap.sh                      # waits for Kubernetes, checks the Vault injector's TLS, re-unseals Vault, repairs anything missing
 scripts/splunk.sh                         # Splunk has no restart policy: start it every session
 
 # 2. Only if you'll merge PRs this session (merging deploys through the runner):

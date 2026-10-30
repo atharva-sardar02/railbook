@@ -202,7 +202,7 @@ Same pattern as the app: a random value generated once, a policy that can read e
 and a role that gives that policy only to the `monitoring-grafana` service account in the
 `monitoring` namespace.
 
-**On the Grafana pod** (`grafana.podAnnotations`):
+**On the Grafana pod** (`grafana.podAnnotations`; plus `grafana.podLabels: {vault-agent-inject: "true"}`, the label the injector webhook selects on since 2026-10-29):
 
 ```yaml
 vault.hashicorp.com/agent-inject: "true"
@@ -315,12 +315,19 @@ it's **pending**). That avoids alerting on one bad scrape. Firing alerts go to A
 
 ```promql
 (sum(up{namespace="railbook", job="railbook-api"}) or vector(0)) == 0
+or
+(sum(kube_deployment_status_replicas_available{namespace="railbook", deployment="railbook-api"}) or vector(0)) == 0
 ```
 - `up` is 1 for each pod Prometheus scraped successfully, 0 for a failed scrape.
 - `sum(...)` = number of healthy API pods.
 - The trap: if **all** pods are gone, there are no targets, so there's no `up` series at all —
   "nothing", not 0. `nothing == 0` is nothing, so a naive `sum(up) == 0` would never fire in
   exactly the case it's for. `or vector(0)` replaces "nothing" with 0.
+- **Second half (added 2026-10-29).** Pods can be alive but not Ready, e.g. when the DB rejects
+  their user: `/readyz` fails, Kong has nowhere to send traffic, the site returns 503. Prometheus
+  still scrapes not-ready pods, so `up` stays 1 and the first half never fires (that's what
+  happened on 2026-10-25). kube-state-metrics' `kube_deployment_status_replicas_available` counts
+  only Ready pods.
 
 ### `RailBookHighErrorRate` (warning)
 
@@ -472,6 +479,7 @@ between scrapes), so Prometheus can scrape without a secret.
 | 25 POST /bookings in a row | 16 × 201, 4 × 402 (every 5th simulates a payment failure), 5 × 429 from Kong; the same numbers in `railbook_bookings_total` and `kong_http_requests_total` |
 | `RailBookBookingsRateLimited` | Did **not** fire at first (the new-counter problem); after the fix, fired and reached Alertmanager |
 | `RailBookApiDown` | Scaled the API to 0: site answered 503, alert pending → firing in ~1 min, critical in Alertmanager; scaled back to 2: resolved |
+| `RailBookApiDown`, pods alive but not Ready (2026-10-29) | Revoked the API's DB leases in Vault: pods stayed Running (1/2), site 503, alert pending after ~1.5 min, firing at 2.5 min |
 | Grafana login | `admin` + password from Vault works; a wrong password gets 401 |
 | Grafana datasource | "Successfully queried the Prometheus API" |
 | Dashboard | Loaded from the ConfigMap; all 17 panel queries return data |
@@ -490,6 +498,7 @@ between scrapes), so Prometheus can scrape without a secret.
 | Script "succeeded" though Helm failed | The output was piped into `grep`, which returned the exit code | Run without a pipe and check `$?` | `cmd \| grep` reports grep's status, not cmd's. |
 | Grafana stuck at `Init:0/2` | `initDatasources` runs the sidecar as an init container, but `watchMethod: WATCH` (default) never exits | `watchMethod: LIST` | An init container must finish; a watcher never does. |
 | Grafana restarted every ~2 min, exit 137, node at 850 % CPU | Grafana 12 needs ~250 MB to start; at a 256Mi limit the Go garbage collector ran nonstop, start-up took minutes and the liveness probe killed it | Limit 512Mi (it settles at ~380 MB) | Exit 137 = killed (SIGKILL). Reason `OOMKilled` → memory limit; reason `Error` with failing probes → too slow. Memory pressure shows up as CPU. |
+| Grafana 13 killed by liveness (exit 137) under login + dashboard load (2026-10-25) | At a 512Mi limit it reached 484 MiB and stalled. The working set counts page cache too: idle it shows ~450–550 MiB while the process itself (RSS) is ~240 MiB | Limit 768Mi | A container's memory limit applies to its working set (process memory + active page cache), not just what `ps` shows. |
 | 429 alert and Kong panels would never match | Kong labels series `service="railbook.railbook-api.http"`, but Prometheus already sets `service` to the scraped Kubernetes Service; on a clash it keeps its own and renames the target's to `exported_service` | Use `exported_service` | Look at real series (`/api/v1/series`) before writing queries. |
 | Alert summary said "above 0%" | Helm's `mul` converts to integers: 0.05 × 100 → 0 | `mulf` | Template functions have types too. |
 | Rate-limit alert didn't fire for the first burst | The 429 counter is created at the first 429; its first sample is already 5, so `rate()` sees no increase | Second half with `unless … offset 5m` | `rate()` and `increase()` can't see the jump from "no series" to the first value. Watch for this on any counter with a rarely-seen label. |
