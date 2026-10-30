@@ -213,8 +213,10 @@ Vault Agent then uses that Vault token to fetch the secrets and writes them as f
 
 You don't write Vault code in the app. You add **annotations** to the pod; a Kubernetes **mutating webhook** rewrites the pod as it's created:
 
-1. **`vault-agent-init`** (init container): logs in, renders the template to `/vault/secrets/app.env`, exits. The app container starts only after this.
-2. **`vault-agent`** (sidecar): keeps the login and the DB credential's lease renewed while the pod lives.
+1. **`vault-agent-init`** (init container): logs in, renders the templates to `/vault/secrets/app.env` and `/vault/secrets/db.json`, exits. The app container starts only after this.
+2. **`vault-agent`** (sidecar): keeps the login and the DB credential's lease renewed while the pod lives, and re-renders `db.json` when Vault issues a new user at `max_ttl`.
+
+With `agent-cache-enable` the init container saves its Vault token and leases to a shared in-memory cache, and the sidecar starts from it. Without that (until 2026-10-29) the sidecar asked for a **second** DB user and renewed only that one, while the app used the first, which Vault dropped after 1 h (STATUS: bugs after block 6).
 
 ### Dynamic database credentials
 
@@ -318,17 +320,21 @@ Reusable snippets, so the API Deployment and the setup Job can't drift apart:
 
 **The `{{\` \`}}` wrapping:** Vault Agent templates use the same `{{ }}` syntax as Helm. Wrapping them in a raw string (`` {{` ... `}} ``) tells Helm "print this literally", so Vault Agent sees it.
 
-The rendered file:
+The rendered files:
 
 ```sh
-export DB_USER="v-kubernet-railbook-…"
-export DB_PASSWORD="…"
+# /vault/secrets/app.env — static secret, loaded into the env once at start
 export PAYMENT_API_KEY="pay_test_…"
+```
+
+```json
+// /vault/secrets/db.json — dynamic DB user; app/db.py reads it on every new connection
+{"password":"…","username":"v-kubernet-railbook-…"}
 ```
 
 ### `templates/configmap.yaml`
 
-Non-secret config only: `PORT`, `LOG_LEVEL`, `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_ROLE`. Factor III, with the secret half delivered by Vault.
+Non-secret config only: `PORT`, `LOG_LEVEL`, `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_ROLE`, `DB_CREDENTIALS_FILE` (the path, not the secret). Factor III, with the secret half delivered by Vault.
 
 ### `templates/api.yaml`
 

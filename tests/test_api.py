@@ -1,9 +1,14 @@
+import json
+import os
+import secrets
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
-from sqlalchemy import update
+from sqlalchemy import text, update
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.db import get_engine
 from app.models import Inventory
 
@@ -114,3 +119,33 @@ def test_metrics_exposed(client):
     body = client.get("/metrics").text
     assert 'railbook_bookings_total{status="confirmed"}' in body
     assert "http_request_duration_seconds" in body
+
+
+def test_db_credentials_read_from_file_on_each_connect(tmp_path, monkeypatch):
+    # In the cluster Vault Agent rewrites this file when it rotates the DB user; new connections
+    # must use what is in the file now, not what was in the environment at startup.
+    # The real test-DB login comes from the environment (conftest.py), like every other run.
+    user = os.environ["DB_USER"]
+    creds = tmp_path / "db.json"
+    creds.write_text(json.dumps({"username": user, "password": os.environ["DB_PASSWORD"]}))
+    monkeypatch.setenv("DB_PASSWORD", secrets.token_hex(16))  # must not be used
+    monkeypatch.setenv("DB_CREDENTIALS_FILE", str(creds))
+    get_settings.cache_clear()
+    get_engine.cache_clear()
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT current_user")).scalar() == user
+
+        # Simulate Vault rotating the user: the old password no longer works.
+        creds.write_text(json.dumps({"username": user, "password": secrets.token_hex(16)}))
+        engine.dispose()  # drop pooled connections so the next one is new
+        try:
+            engine.connect()
+            raise AssertionError("connected with the old credentials")
+        except OperationalError:
+            pass
+    finally:
+        get_engine().dispose()
+        get_settings.cache_clear()
+        get_engine.cache_clear()

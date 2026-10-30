@@ -1,6 +1,7 @@
 # RailBook — Status
 
-**As of 2026-10-24.** All blocks done. Verification results: [06-verify](learning/06-verify.md).
+**As of 2026-10-29.** All blocks done. Verification results: [06-verify](learning/06-verify.md).
+Bugs found after block 6 and fixed: [below](#bugs-found-after-block-6).
 
 ## Progress
 
@@ -16,6 +17,18 @@
 | 6 | Verify "done when" + Twelve-Factor checklist | Done | [06-verify](learning/06-verify.md): 6/6 done-when; 11/12 factors in full, X in part (known gap) |
 
 Plain-language overview of every service and port: [00-glossary](learning/00-glossary.md).
+
+## Bugs found after block 6
+
+Found while using the running system (2026-10-25/26), fixed 2026-10-29.
+
+| Bug | Cause | Fix | Verified |
+|---|---|---|---|
+| API returns 503 about 1 h after every pod start | `vault-agent-init` and the `vault-agent` sidecar each asked Vault for their **own** DB user. The app started with the init container's user, but only the sidecar's lease was renewed, so Vault dropped the app's user at the 1 h TTL. | `vault.hashicorp.com/agent-cache-enable`: the sidecar starts from the init container's cache and renews **that** lease (one DB user per pod). The DB user is rendered to `/vault/secrets/db.json` and read on every new connection (`app/db.py`), so when Vault issues a new user at `max_ttl` (24 h) the app switches without a restart. | Role TTLs cut to 2 min / 6 min: 293/293 requests OK over 10 min, through 4 renewals and a forced new user, 0 restarts. Then a 75 min soak at the real 1 h / 24 h TTLs: 1490/1490 OK, 0 restarts, both pods still on their first DB user after the 1 h mark (the setup Job's unrenewed user expired on time at 1 h) |
+| New pods sometimes start **without** Vault containers and crash-loop (`cannot open /vault/secrets/app.env`) | The webhook's `failurePolicy: Ignore`: when the API server can't call the injector (it was unreachable, or its TLS CA in the webhook config was stale), Kubernetes creates the pod anyway, unmodified. The injector started while the API server was still unreachable after `docker start`. | `failurePolicy: Fail`, so the pod is refused and the controller retries until the injector works. The webhook only applies to pods labelled `vault-agent-inject: "true"`, so a broken injector can't block unrelated pods. Chart anti-affinity removed, so `rollout restart` works on one node. `scripts/vault-injector-check.sh` (run by bootstrap) checks the served certificate against the webhook's CA and restarts the injector if needed. | Injector scaled to 0: the replacement API pod was refused (`failed calling webhook`), not created broken; the site stayed up on the other pod. After scaling it back, the ReplicaSet created the pod, with Vault containers, by itself about 5½ min later. A wrong CA patched into the webhook was put back by the injector itself within seconds. |
+| Grafana killed by liveness (exit 137); Kong "failure to get a peer from the ring-balancer" | 512Mi limit: Grafana 13 reached 484 MiB under login + dashboard load and stalled | Limit 768Mi (`deploy/monitoring/values.yaml`) | Deployed |
+| `RailBookApiDown` didn't fire while the site returned 503 | Prometheus still scrapes pods that are alive but not Ready, so `up` stayed 1 | Also fires when kube-state-metrics shows 0 available (Ready) replicas | All DB leases revoked in Vault: pods alive but not Ready, site 503; alert pending after ~1.5 min, firing at 2.5 min |
+| Docs: unclear whether Splunk Free has a login | The web UI shows a login form, which looked like authentication | Checked: the form accepts any password, even an empty one, and the management API accepts any credentials. Docs say so (05-splunk, glossary, PRD). | Wrong and empty passwords both opened the search app |
 
 ## Resuming a session
 
@@ -54,5 +67,7 @@ docker stop splunk railbook-control-plane railbook-test-pg   # frees ~5 GB of me
 - Local `gh` CLI is v2.4: use `gh api …` for Actions run details.
 - Local `curl` is 7.81 and doesn't resolve `*.localhost`: use `curl -H 'Host: grafana.localhost' http://127.0.0.1/` (browsers are fine).
 - Vault upgrades need `--server-side=false` (already in `bootstrap.sh`).
+- If the Vault injector was down, the ReplicaSet backs off exponentially after the refused creates (5½ min in our test, at most ~16 min) before it tries again. `scripts/vault-injector-check.sh`, then `kubectl -n railbook rollout restart deploy/railbook-api` to retry at once.
+- Revoking the API's DB leases by hand (`vault lease revoke -prefix database/creds/railbook-api`) makes the site 503 until the sidecar's next renewal attempt notices (up to ~40 min with the 1 h TTL). Use `kubectl -n railbook rollout restart deploy/railbook-api` to recover at once.
 - If Docker Desktop dies mid-install, a Helm release can be left `pending-install`; for a first install, `helm uninstall <release> -n <ns>` and rerun `bootstrap.sh`.
 - Check free space on C: (`df -h /mnt/c`) before large image pulls: Docker's disk image lives there, and a full C: crashes Docker Desktop.

@@ -48,6 +48,7 @@ helm upgrade --install vault hashicorp/vault --version "$VAULT_CHART_VERSION" \
   -n vault --create-namespace -f deploy/vault/values.yaml --server-side=false
 kubectl wait -n vault --for=jsonpath='{.status.phase}'=Running pod/vault-0 --timeout=3m
 kubectl rollout status -n vault deploy/vault-agent-injector --timeout=3m
+scripts/vault-injector-check.sh
 scripts/vault-unseal.sh
 scripts/vault-setup.sh base
 

@@ -36,17 +36,25 @@ spec:
   groups:
     - name: railbook
       rules:
-        # `up` is set by Prometheus itself: 1 if the last scrape worked, 0 if not. If every pod
-        # is gone there are no targets and no `up` series at all, so `or vector(0)` turns
-        # "nothing" into 0 and the alert still fires.
+        # Two ways the API can be down:
+        #  1. No pod answers /metrics. `up` is set by Prometheus itself: 1 if the last scrape
+        #     worked, 0 if not. If every pod is gone there are no targets and no `up` series at
+        #     all, so `or vector(0)` turns "nothing" into 0 and the alert still fires.
+        #  2. Pods answer /metrics but none is Ready (e.g. /readyz fails because the DB rejects
+        #     them), so Kong has nowhere to send traffic and the site returns 503. Prometheus
+        #     still scrapes not-ready pods, so `up` stays 1; kube-state-metrics' count of
+        #     available (= Ready) replicas sees it.
         - alert: RailBookApiDown
-          expr: (sum(up{namespace="{{ .Release.Namespace }}", job="railbook-api"}) or vector(0)) == 0
+          expr: |
+            (sum(up{namespace="{{ .Release.Namespace }}", job="railbook-api"}) or vector(0)) == 0
+            or
+            (sum(kube_deployment_status_replicas_available{namespace="{{ .Release.Namespace }}", deployment="railbook-api"}) or vector(0)) == 0
           for: 1m
           labels:
             severity: critical
           annotations:
-            summary: No RailBook API pod is up
-            description: Prometheus has not scraped any RailBook API pod for 1 minute.
+            summary: No RailBook API pod is serving
+            description: For 1 minute, either no RailBook API pod could be scraped or none was Ready.
 
         # Share of requests answered with 5xx. Measured in the app (http_requests_total from
         # prometheus-fastapi-instrumentator groups codes as 2xx/4xx/5xx). 402/409 are 4xx: a

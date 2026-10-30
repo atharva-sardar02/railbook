@@ -29,6 +29,8 @@ spec:
       labels:
         app.kubernetes.io/name: railbook-api
         {{- include "railbook.labels" . | nindent 8 }}
+        # Opt-in for the Vault Agent Injector webhook (deploy/vault/values.yaml: objectSelector).
+        vault-agent-inject: "true"
       annotations:
         # Env vars are read only at startup. Changing the ConfigMap changes this hash,
         # which changes the pod template, which makes Kubernetes roll out new pods.

@@ -44,6 +44,8 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: railbook-postgres
+        # Opt-in for the Vault Agent Injector webhook (deploy/vault/values.yaml: objectSelector).
+        vault-agent-inject: "true"
       annotations:
         # Vault Agent Injector: before Postgres starts, an init container logs into Vault as
         # this pod's service account and writes /vault/secrets/postgres.env.

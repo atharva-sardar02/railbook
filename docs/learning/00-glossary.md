@@ -43,7 +43,7 @@ reachable from inside the cluster, which is the point: only Kong's door is opene
 | http://grafana.localhost/ | Dashboards (charts) | `admin` + password from `scripts/vault-read.sh secret/monitoring/grafana admin_password` |
 | http://prometheus.localhost/ | Raw metrics, queries, alert rules, scrape targets | none |
 | http://alertmanager.localhost/ | Alerts currently firing | none |
-| http://127.0.0.1:8000/ | Splunk: search the logs (start it with `scripts/splunk.sh`) | Free license has authentication off; if a login page appears: `admin` + `scripts/vault-read.sh secret/splunk/admin password` |
+| http://127.0.0.1:8000/ | Splunk: search the logs (start it with `scripts/splunk.sh`) | Free license has authentication off: the login form accepts any password (the real one is `scripts/vault-read.sh secret/splunk/admin password`) |
 
 All five go through the same door (port 80) and Kong decides by the name you typed which
 service answers. Browsers know `*.localhost` means your own machine. (Old `curl` versions don't:

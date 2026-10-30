@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RailBook App Flow</title>
+<style>
+  :root { --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --card: #f6f8fa; --line: #d1d9e0; --accent: #0969da; }
+  html, body { overflow-x: hidden; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { margin: 0; padding: 24px 16px 64px; }
+  h1 { font-size: 1.8rem; margin: 0 0 4px; }
+  h2 { font-size: 1.3rem; margin: 48px 0 6px; padding-top: 12px; border-top: 1px solid var(--line); }
+  p.lead { color: var(--muted); margin: 0 0 16px; }
+  nav { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; }
+  nav a { color: var(--accent); text-decoration: none; margin-right: 16px; white-space: nowrap; line-height: 2; }
+  .note { color: var(--muted); margin: 0 0 12px; }
+  .diagram { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 16px; overflow-x: hidden; }
+  .diagram svg { max-width: 100%; height: auto; }
+  h3 { font-size: 1.05rem; margin: 20px 0 8px; }
+  .hint { font-size: 0.85rem; color: var(--muted); margin: 6px 0 0; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 0.92rem; }
+  th, td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--card); }
+  code { background: var(--card); padding: 1px 5px; border-radius: 4px; font-size: 0.9em; }
+</style>
+</head>
+<body>
+<main>
+<h1>RailBook: how the whole app runs</h1>
+<p class="lead">Six diagrams, from the big picture down to what happens when things fail. All names,
+ports and numbers are from the running system (verified 2026-10-24/25).</p>
+
+<nav>
+  <a href="#map">1. The map</a>
+  <a href="#booking">2. One booking</a>
+  <a href="#startup">3. A pod starting (secrets)</a>
+  <a href="#cicd">4. Code to production</a>
+  <a href="#observe">5. Metrics and logs</a>
+  <a href="#failures">6. When things fail</a>
+  <a href="#ports">7. Every port</a>
+</nav>
+
+<!-- ============================================================ 1 -->
+<h2 id="map">1. The map: everything that runs, and every port</h2>
+<p class="note">Three layers: your laptop, Docker's <code>kind</code> network, and the Kubernetes cluster
+inside one Docker container. Only Kong (<code>127.0.0.1:80</code>) and Splunk's web UI
+(<code>127.0.0.1:8000</code>) are reachable from your browser. Every port is tagged with where it lives:
+<b>[laptop]</b>, <b>[container]</b> (a Docker container on the laptop), <b>[node]</b> (opened on the kind node
+container), <b>[service]</b> (a stable in-cluster address) or <b>[pod]</b> (where the program really listens).
+The complete list is in <a href="#ports">section 7</a>.</p>
+<h3>1a. Your laptop, and the doors into the cluster</h3>
+<div class="diagram"><pre class="mermaid">
+flowchart TB
+  user(["You: browser"])
+  you(["You: kubectl, helm, pytest"])
+  gh["GitHub<br/>repo · Actions · GHCR images"]
+
+  subgraph laptop["Your laptop: WSL2 + Docker Desktop"]
+    runner["Self-hosted runner railbook-laptop<br/>systemd service"]
+    testpg[("railbook-test-pg · container<br/>Postgres for local tests")]
+    subgraph dnet["Docker network kind · 172.19.0.x"]
+      node["kind node container railbook-control-plane<br/>172.19.0.2 · the whole Kubernetes cluster, see 1b<br/>[node] :30080 Kong NodePort · :6443 Kubernetes API"]
+      splunk["Splunk 10.6.0 · container · 172.19.0.3<br/>[container] web :8000 · HEC :8088<br/>mgmt :8089 · KV store :8191"]
+    end
+  end
+
+  user -->|"[laptop] 127.0.0.1:80 → [node] :30080"| node
+  user -->|"[laptop] 127.0.0.1:8000 → [container] :8000"| splunk
+  you -->|"[laptop] 127.0.0.1:41647 → [node] :6443"| node
+  you -->|"[laptop] 127.0.0.1:5433 → [container] :5432"| testpg
+  runner -->|"asks GitHub for jobs · HTTPS 443 outbound"| gh
+  runner -->|"helm upgrade → [node] :6443"| node
+  node -->|"log collector → [container] splunk:8088<br/>kind network only"| splunk
+</pre></div>
+
+<h3>1b. Inside the cluster</h3>
+<div class="diagram"><pre class="mermaid">
+flowchart TB
+  door(["From the laptop: [node] :30080"])
+  splunkx["Splunk container · outside the cluster<br/>splunk:8088"]
+
+  subgraph nskong["namespace kong"]
+    kong["Kong gateway pod<br/>[pod] proxy :8000 · status :8100 · admin :8444<br/>[service] kong-gateway-proxy :80"]
+    kongc["Kong controller pod<br/>turns Ingresses into Kong routes<br/>[pod] webhook :8080 · status :10254 · metrics :10255"]
+  end
+  subgraph nsrb["namespace railbook"]
+    api["API Deployment · 2 pods<br/>[pod] api :8000 + vault-agent sidecar<br/>[service] railbook-api :80"]
+    job["Job railbook-setup<br/>tables + sample trains after every deploy"]
+    pg[("Postgres StatefulSet railbook-postgres-0<br/>[pod] :5432 · [service] railbook-postgres :5432")]
+  end
+  subgraph nsvault["namespace vault"]
+    vault["Vault server vault-0<br/>[pod] :8200 API+UI · :8201 internal<br/>[service] vault :8200"]
+    inj["Vault Agent Injector<br/>[pod] :8080 · [service] :443"]
+  end
+  subgraph nsmon["namespace monitoring"]
+    graf["Grafana<br/>[pod] :3000 · [service] :80"]
+    prom["Prometheus<br/>[pod] :9090"]
+    am["Alertmanager<br/>[pod] :9093"]
+  end
+  subgraph nslog["namespace logging"]
+    otel["OTel log collector · DaemonSet<br/>[pod] metrics :8888 · health :13133"]
+  end
+
+  door --> kong
+  kongc -.->|configures| kong
+  kong -->|"/trains /bookings /stations /docs /<br/>→ [service] :80 → [pod] :8000"| api
+  kong -->|"grafana.localhost → [pod] :3000"| graf
+  kong -->|"prometheus.localhost → :9090"| prom
+  kong -->|"alertmanager.localhost → :9093"| am
+  api -->|"SQL → railbook-postgres:5432"| pg
+  job -->|"SQL :5432"| pg
+  api -.->|"DB user + payment key<br/>vault.vault.svc:8200"| vault
+  inj -.->|"adds vault-agent to new pods"| api
+  vault -.->|"creates and drops DB users"| pg
+  graf -->|PromQL| prom
+  prom -->|firing alerts| am
+  prom -.->|"scrapes /metrics every 30 s"| api
+  prom -.->|scrapes| kong
+  prom -.->|scrapes| vault
+  prom -.->|scrapes| otel
+  otel -->|"reads pod log files on the node<br/>HTTPS → splunk:8088"| splunkx
+</pre></div>
+
+<table>
+  <tr><th>Solid arrow</th><td>A request carrying user traffic or data</td></tr>
+  <tr><th>Dotted arrow</th><td>Background work: configuration, secrets, scraping metrics</td></tr>
+</table>
+
+<!-- ============================================================ 2 -->
+<h2 id="booking">2. One booking, end to end</h2>
+<p class="note">What happens when you press <b>Pay &amp; book</b>. The request ID Kong adds is the thread
+that ties together every log line about this booking.</p>
+<div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant B as Browser
+  participant K as Kong gateway
+  participant S as Service railbook-api
+  participant A as API pod (FastAPI)
+  participant P as Postgres
+  participant L as Logs → Splunk
+
+  B->>K: POST /bookings (127.0.0.1:80)
+  Note over K: Route "POST /bookings" picks these plugins:<br/>correlation-id: add X-Request-ID (uuid)<br/>rate-limiting: max 20 per minute per IP<br/>prometheus: count + time it<br/>file-log: write one JSON line
+  alt over 20 bookings this minute
+    K-->>B: 429 Too Many Requests (the API never sees it)
+  else allowed
+    K->>S: forward with X-Request-ID
+    S->>A: to one Ready pod, port 8000
+    Note over A: middleware binds request_id to every log line<br/>pydantic checks the body (bad input → 422)
+    A->>P: BEGIN · SELECT seats ... FOR UPDATE
+    Note over P: Row lock: two people booking the same class<br/>wait in line, so seats can never go negative
+    alt not enough seats
+      A-->>B: 409 "only N seats left"
+    else payment declined (simulate failure ticked)
+      A->>P: ROLLBACK (no seats taken)
+      A-->>B: 402 "payment declined"
+    else payment OK (mock provider, key from Vault)
+      A->>P: seats = seats - N · INSERT booking (new 10-digit PNR) · COMMIT
+      A-->>K: 201 + PNR + X-Request-ID
+      K-->>B: 201 Confirmed, PNR shown
+    end
+  end
+  A--)L: JSON lines: booking_confirmed, request (status, duration_ms, request_id)
+  K--)L: JSON line: status, latency, x-request-id
+</pre></div>
+
+<!-- ============================================================ 3 -->
+<h2 id="startup">3. An API pod starting: how it gets its secrets</h2>
+<p class="note">No password is stored in the code, the image, Kubernetes Secrets or GitHub. Each pod
+proves who it is to Vault and gets its own database user, valid 1 hour and renewed while the pod runs.</p>
+<div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant K8s as Kubernetes
+  participant I as Vault Agent Injector
+  participant Init as vault-agent-init (init container)
+  participant V as Vault
+  participant P as Postgres
+  participant App as api container
+  participant Side as vault-agent (sidecar)
+
+  K8s->>I: new pod has annotation vault.hashicorp.com/agent-inject
+  I-->>K8s: add an init container + a sidecar to the pod
+  K8s->>Init: start first
+  Init->>V: login with the pod's service account token (role railbook-api)
+  V->>K8s: is this token real? (TokenReview)
+  K8s-->>V: yes: account railbook-api, namespace railbook
+  Init->>V: read database/creds/railbook-api + secret/railbook/payment
+  V->>P: CREATE ROLE v-kubernet-railbook-... (1 h lease)
+  V-->>Init: username, password, payment key
+  Init->>Init: write /vault/secrets/app.env + db.json,<br/>save token + leases to the shared cache, exit
+  K8s->>App: start: load app.env into env vars, then python -m app
+  Note over App: config from ConfigMap (DB_HOST, PORT ...)<br/>+ payment key from app.env · DB user from db.json<br/>(read on every new connection) · listens on :8000
+  K8s->>App: readiness probe GET /readyz (pings the database)
+  App-->>K8s: 200 ready → pod joins the Service, Kong starts sending traffic
+  Side->>Side: start from the init container's cache (same lease, same DB user)
+  loop while the pod runs
+    Side->>V: renew the lease before the hour runs out
+  end
+  Side->>V: at max_ttl (24 h): read a new DB user
+  Side->>Side: rewrite db.json → next DB connections use the new user
+</pre></div>
+
+<!-- ============================================================ 4 -->
+<h2 id="cicd">4. From code change to production</h2>
+<p class="note">Nobody copies files to a server. A merged pull request is tested, scanned, built once
+and deployed automatically, with no downtime.</p>
+<div class="diagram"><pre class="mermaid">
+flowchart TD
+  dev["You open a pull request"] --> prchecks["GitHub-hosted runner: checks<br/>gitleaks (secrets) · ruff (lint)<br/>11 tests on real Postgres 16 · helm lint"]
+  prchecks --> review{"Checks pass and<br/>you merge to main?"}
+  review -- no --> dev
+  review -- yes --> checks["checks job again on main"]
+  checks --> image["image job (GitHub-hosted)<br/>docker build → Trivy scan<br/>push ghcr.io/.../railbook:&lt;git SHA&gt;"]
+  image --> deploy["deploy job on YOUR laptop<br/>(self-hosted runner railbook-laptop,<br/>least-privilege account github-deployer, 24 h token)"]
+  deploy --> helm["helm upgrade --set image.tag=&lt;SHA&gt;<br/>= new numbered release"]
+  helm --> roll["Rolling update: start 1 new pod,<br/>wait until Ready, remove 1 old pod, repeat<br/>(never below 2 ready)"]
+  roll --> setup["Job railbook-setup<br/>(Helm hook after upgrade)"]
+  setup --> ok{"Pods Ready and<br/>Job succeeded?"}
+  ok -- no --> rollback["Helm rolls back to the<br/>previous release by itself"]
+  ok -- yes --> smoke["Smoke test through Kong:<br/>/ and /stations return 200"]
+  smoke --> live(["New version live"])
+</pre></div>
+
+<!-- ============================================================ 5 -->
+<h2 id="observe">5. Watching it: metrics and logs</h2>
+<p class="note">Two separate pipelines. <b>Metrics</b> answer "how many, how fast, how many errors" (numbers
+over time). <b>Logs</b> answer "what happened to this one request".</p>
+<div class="diagram"><pre class="mermaid">
+flowchart LR
+  subgraph metrics["Metrics: Prometheus PULLS every 30 s"]
+    direction LR
+    m1["API /metrics :8000<br/>requests, latency, bookings"] --> prom2["Prometheus<br/>stores 1 day"]
+    m2["Kong :8100<br/>per-route codes incl. 429"] --> prom2
+    m3["Vault metrics :8200<br/>sealed?"] --> prom2
+    m4["Collector :8888<br/>lines sent / queued / dropped"] --> prom2
+    prom2 --> graf2["Grafana dashboard<br/>grafana.localhost/d/railbook"]
+    prom2 --> rules{"Alert rules<br/>every 30 s"}
+    rules -->|firing| am2["Alertmanager<br/>alertmanager.localhost"]
+  end
+
+  subgraph logs["Logs: apps WRITE to stdout, platform ships them"]
+    direction LR
+    l1["API: JSON lines to stdout"] --> files["containerd writes<br/>/var/log/pods/... on the node"]
+    l2["Kong file-log: JSON to stdout"] --> files
+    files --> col["OTel collector (DaemonSet)<br/>tails files, adds pod/namespace,<br/>batches, retries 5 min"]
+    col -->|"HTTPS splunk:8088 + HEC token from Vault"| spl["Splunk index main<br/>127.0.0.1:8000"]
+    spl --> searches["Saved searches:<br/>errors by route · follow one request · 429s"]
+  end
+</pre></div>
+
+<table>
+  <tr><th>Alert</th><th>Fires when</th></tr>
+  <tr><td>RailBookApiDown (critical)</td><td>Prometheus can't scrape any API pod</td></tr>
+  <tr><td>RailBookHighErrorRate (warning)</td><td>More than 5 % of requests are 5xx for 2 min</td></tr>
+  <tr><td>RailBookBookingsRateLimited (info)</td><td>Kong answered 429 on POST /bookings</td></tr>
+  <tr><td>VaultSealedOrDown (critical)</td><td>Vault is sealed or unreachable</td></tr>
+  <tr><td>LogsQueuedForSplunk (warning)</td><td>Log batches waiting to be resent for 2 min (nothing lost yet)</td></tr>
+  <tr><td>LogsDroppedBeforeSplunk (critical)</td><td>Log lines dropped after 5 min of failed retries</td></tr>
+</table>
+
+<!-- ============================================================ 6 -->
+<h2 id="failures">6. When things fail: what Kubernetes does on its own</h2>
+<p class="note">Kubernetes keeps comparing "what should run" with "what runs" and fixes the difference.
+The last branch is the real outage of 2026-10-25, which this loop could <b>not</b> fix by itself (fixed in the app and chart on 2026-10-29).</p>
+<div class="diagram"><pre class="mermaid">
+flowchart TD
+  start(["Something goes wrong<br/>with an API pod"]) --> q1{"What kind of failure?"}
+
+  q1 -->|"process crashes"| c1["Container exits"] --> r1["kubelet restarts it<br/>(restart count +1)"]
+  q1 -->|"pod deleted / node lost"| c2["Fewer pods than replicas: 2"] --> r2["ReplicaSet creates a new pod<br/>(tested: 0 failed requests)"]
+  q1 -->|"hangs: /healthz stops answering"| c3["Liveness probe fails 3 times"] --> r1
+  q1 -->|"can't reach the database:<br/>/readyz returns 503"| c4["Readiness probe fails"] --> r4["Pod removed from the Service:<br/>Kong stops sending it traffic"]
+  r4 --> q2{"Does the database<br/>come back?"}
+  q2 -->|"yes (Postgres restarted)"| back["/readyz OK again → traffic resumes"]
+  q2 -->|"no: the app's own DB user<br/>was deleted"| stuck["Stuck: pod alive but never ready<br/>→ site returns 503"]
+
+  stuck --> why["Why (2026-10-25): init container and sidecar each got<br/>their own DB user. The app used the init's,<br/>only the sidecar's was renewed → Vault dropped<br/>the app's user after 1 h"]
+  why --> fix["Fixed 2026-10-29: agent cache (one lease per pod)<br/>+ app reads db.json on every new connection"]
+  why -.-> alerts["Alerts: KubePodNotReady fired; RailBookApiDown<br/>did not (metrics still scraped) — now also fires on<br/>0 Ready replicas. No receiver is configured to notify anyone"]
+</pre></div>
+
+<!-- ============================================================ 7 -->
+<h2 id="ports">7. Every port, and where it lives</h2>
+<p class="note">A port number only means something together with <b>where</b> it is. The same number can
+appear in several layers and mean different things: 8000 is Kong's proxy inside its pod, the API inside
+its pod, and Splunk's web UI on the laptop.</p>
+
+<table>
+  <tr><th>Layer</th><th>What it is</th><th>Address range</th><th>Reachable from</th></tr>
+  <tr><td><b>Laptop</b></td><td>A port on your machine, published by Docker</td><td><code>127.0.0.1</code></td><td>Only your laptop (not Wi-Fi, not the internet)</td></tr>
+  <tr><td><b>Container</b></td><td>A Docker container running directly on the laptop, outside Kubernetes</td><td><code>172.19.0.x</code> (Docker network <code>kind</code>)</td><td>Containers on that network; the laptop only where published</td></tr>
+  <tr><td><b>Node</b></td><td>A port opened on the kind node container itself (by Kubernetes, or a host-network pod)</td><td><code>172.19.0.2</code></td><td>The Docker network; the laptop only where published</td></tr>
+  <tr><td><b>Service</b></td><td>A stable virtual address with a DNS name, in front of pods that come and go</td><td><code>10.96.x.x</code></td><td>Inside the cluster only</td></tr>
+  <tr><td><b>Pod</b></td><td>Where a program actually listens. Changes IP each time the pod is replaced</td><td><code>10.244.0.x</code></td><td>Inside the cluster only</td></tr>
+</table>
+
+<h3>Doors from your laptop (Docker port mappings)</h3>
+<table>
+  <tr><th>Laptop port</th><th>Goes to</th><th>Open in the browser</th></tr>
+  <tr><td><code>127.0.0.1:80</code></td><td>[node] kind node <code>:30080</code> → [pod] Kong proxy <code>:8000</code></td><td>http://127.0.0.1/ (app), grafana.localhost, prometheus.localhost, alertmanager.localhost</td></tr>
+  <tr><td><code>127.0.0.1:8000</code></td><td>[container] Splunk web UI <code>:8000</code></td><td>http://127.0.0.1:8000/</td></tr>
+  <tr><td><code>127.0.0.1:5433</code></td><td>[container] railbook-test-pg <code>:5432</code></td><td>no (used by <code>pytest</code>)</td></tr>
+  <tr><td><code>127.0.0.1:41647</code> (random, chosen by kind)</td><td>[node] Kubernetes API server <code>:6443</code></td><td>no (used by <code>kubectl</code>, Helm, the runner)</td></tr>
+</table>
+
+<h3>Docker containers on the laptop (outside Kubernetes)</h3>
+<table>
+  <tr><th>Container</th><th>Port</th><th>Purpose</th><th>Published to laptop?</th></tr>
+  <tr><td rowspan="4">splunk (172.19.0.3)</td><td>8000</td><td>Web UI</td><td>yes, 127.0.0.1:8000</td></tr>
+  <tr><td>8088</td><td>HEC: receives logs from the collector</td><td>no: only the kind network</td></tr>
+  <tr><td>8089</td><td>Management REST API (used by <code>scripts/splunk.sh</code>)</td><td>no: inside the container</td></tr>
+  <tr><td>8191</td><td>Splunk's internal KV store</td><td>no: inside the container</td></tr>
+  <tr><td>railbook-test-pg</td><td>5432</td><td>Postgres for local tests</td><td>yes, 127.0.0.1:5433</td></tr>
+  <tr><td rowspan="2">railbook-control-plane (172.19.0.2)</td><td>30080</td><td>Kong's NodePort (Kubernetes opens it on the node)</td><td>yes, 127.0.0.1:80</td></tr>
+  <tr><td>6443</td><td>Kubernetes API server</td><td>yes, 127.0.0.1:41647</td></tr>
+</table>
+
+<h3>Inside the cluster: Services and pods</h3>
+<table>
+  <tr><th>Namespace</th><th>Program</th><th>[pod] listens on</th><th>[service] name:port</th><th>Who calls it</th></tr>
+  <tr><td rowspan="2">kong</td><td>Kong gateway (proxy)</td><td><b>8000</b> proxy · 8100 status/metrics · 8444 admin API</td><td>kong-gateway-proxy :80 (NodePort 30080) · kong-gateway-admin :8444</td><td>Every browser request (via the laptop door); Prometheus on 8100; the controller on 8444</td></tr>
+  <tr><td>Kong controller</td><td>8080 webhook · 10254 status · 10255 metrics</td><td>kong-controller-validation-webhook :443 · kong-controller-metrics :10254/10255</td><td>Kubernetes (checks Ingresses before saving them)</td></tr>
+  <tr><td rowspan="2">railbook</td><td><b>RailBook API</b> (2 pods)</td><td><b>8000</b> (named <code>http</code>): app, /healthz, /readyz, /metrics</td><td>railbook-api :80 → <code>http</code></td><td>Kong (public paths); kubelet (probes); Prometheus (/metrics)</td></tr>
+  <tr><td><b>Postgres</b></td><td><b>5432</b></td><td>railbook-postgres :5432 (headless)</td><td>API, setup Job, Vault (to create DB users)</td></tr>
+  <tr><td rowspan="2">vault</td><td><b>Vault</b> server</td><td><b>8200</b> API + UI · 8201 cluster · 8202 replication</td><td>vault / vault-active / vault-ui :8200</td><td>Vault agents in pods, Prometheus, scripts (via <code>kubectl exec</code>)</td></tr>
+  <tr><td>Vault Agent Injector</td><td>8080</td><td>vault-agent-injector-svc :443 → 8080</td><td>Kubernetes, when a pod is created</td></tr>
+  <tr><td rowspan="6">monitoring</td><td><b>Prometheus</b></td><td><b>9090</b> · 8080 config reloader</td><td>monitoring-kube-prometheus-prometheus :9090</td><td>Kong (prometheus.localhost), Grafana</td></tr>
+  <tr><td><b>Alertmanager</b></td><td><b>9093</b> · 9094 cluster mesh · 8080 reloader</td><td>monitoring-kube-prometheus-alertmanager :9093</td><td>Kong (alertmanager.localhost), Prometheus</td></tr>
+  <tr><td><b>Grafana</b></td><td><b>3000</b> · 9094 gossip · 6060 profiling</td><td>monitoring-grafana :80 → 3000</td><td>Kong (grafana.localhost)</td></tr>
+  <tr><td>Prometheus Operator</td><td>10250</td><td>(its own)</td><td>Kubernetes webhooks</td></tr>
+  <tr><td>kube-state-metrics</td><td>8080 metrics · 8081 self</td><td>(its own)</td><td>Prometheus</td></tr>
+  <tr><td>node-exporter</td><td>9100, on the <b>[node]</b> (host network, IP 172.19.0.2)</td><td>(its own)</td><td>Prometheus</td></tr>
+  <tr><td>logging</td><td><b>OTel log collector</b></td><td>8888 metrics · 13133 health</td><td>otel-collector :8888</td><td>Prometheus; kubelet (probes). It calls out to splunk:8088</td></tr>
+  <tr><td rowspan="2">kube-system</td><td>CoreDNS (cluster DNS)</td><td>53 DNS · 9153 metrics · 8080/8181 probes</td><td>kube-dns :53</td><td>Every pod, to turn names like <code>railbook-postgres</code> into IPs</td></tr>
+  <tr><td>Kubernetes control plane</td><td>6443 API server · 2381 etcd probe · 10257 controller manager · 10259 scheduler, all on the <b>[node]</b></td><td>kubernetes :443 → 6443</td><td>kubectl, Helm, controllers</td></tr>
+</table>
+
+<h3>One request, every port it touches</h3>
+<table>
+  <tr><th>#</th><th>Hop</th><th>Port</th><th>Layer</th></tr>
+  <tr><td>1</td><td>Browser opens http://127.0.0.1/trains</td><td>80</td><td>laptop</td></tr>
+  <tr><td>2</td><td>Docker forwards into the kind node container</td><td>30080</td><td>node</td></tr>
+  <tr><td>3</td><td>Kubernetes forwards the NodePort to Kong</td><td>8000</td><td>pod (Kong)</td></tr>
+  <tr><td>4</td><td>Kong calls the API's Service</td><td>80</td><td>service (railbook-api)</td></tr>
+  <tr><td>5</td><td>The Service picks a Ready API pod</td><td>8000</td><td>pod (API)</td></tr>
+  <tr><td>6</td><td>The API queries the database</td><td>5432</td><td>service → pod (Postgres)</td></tr>
+  <tr><td>7</td><td>Later: the collector ships the log lines to Splunk</td><td>8088</td><td>container (Splunk)</td></tr>
+</table>
+
+</main>
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({ startOnLoad: true, theme: "neutral", securityLevel: "strict",
+                       themeVariables: { fontSize: "16px" },
+                       flowchart: { htmlLabels: true, curve: "basis", useMaxWidth: true, nodeSpacing: 40, rankSpacing: 60 },
+                       sequence: { wrap: false, useMaxWidth: true } });
+</script>
+</body>
+</html>
