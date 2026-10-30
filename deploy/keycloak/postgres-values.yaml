@@ -1,0 +1,10 @@
+# Keycloak's own Postgres: helm upgrade --install keycloak-postgres deploy/charts/postgres -n keycloak
+# A separate instance from railbook-postgres, so a Keycloak problem can't fill or lock the
+# bookings database.
+database: keycloak
+# Keycloak logs in with one fixed login (secret/keycloak/db), not Vault's short-lived users.
+ownerRole: ""
+vault:
+  role: keycloak-postgres
+  adminPasswordPath: secret/data/keycloak/postgres-admin
+  appUserPath: secret/data/keycloak/db

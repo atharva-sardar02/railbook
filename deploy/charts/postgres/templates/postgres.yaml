@@ -1,31 +1,48 @@
-# Postgres as a StatefulSet: a stable name (railbook-postgres-0) and its own disk that survives restarts.
+# Postgres as a StatefulSet: a stable name (<release>-0) and its own disk that survives restarts.
+# All names come from the release name, so the chart installs more than once:
+# railbook-postgres (namespace railbook) and keycloak-postgres (namespace keycloak).
 ---
-# The identity Vault checks: the Vault role railbook-postgres only accepts this service account.
+# The identity Vault checks: the Vault role in .Values.vault.role only accepts this service account.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: railbook-postgres
+  name: {{ .Release.Name }}
 ---
 # Runs once, only when the data directory is empty (first start).
-# Creates the table-owner role; Vault later creates short-lived logins inside it.
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: railbook-postgres-init
+  name: {{ .Release.Name }}-init
 data:
+  {{- if .Values.ownerRole }}
+  # Creates the table-owner role; Vault later creates short-lived logins inside it.
   01-roles.sql: |
     CREATE ROLE {{ .Values.ownerRole }} NOLOGIN;
     GRANT USAGE, CREATE ON SCHEMA public TO {{ .Values.ownerRole }};
+  {{- end }}
+  {{- if .Values.vault.appUserPath }}
+  # Creates a login with a fixed password that owns the database (for apps that can't switch
+  # users while running, like Keycloak). Name and password come from Vault as env vars, never
+  # from this ConfigMap. psql's :"x" / :'x' quote them as identifier / string (no SQL injection).
+  # Not executable, so docker-entrypoint.sh sources it and it sees the exported env.
+  02-app-user.sh: |
+    psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+      -v user="$APP_DB_USER" -v pw="$APP_DB_PASSWORD" -v db="$POSTGRES_DB" <<'SQL'
+    CREATE ROLE :"user" LOGIN PASSWORD :'pw';
+    ALTER DATABASE :"db" OWNER TO :"user";
+    ALTER SCHEMA public OWNER TO :"user";
+    SQL
+  {{- end }}
 ---
-# Headless Service (clusterIP: None): DNS name railbook-postgres points straight at the pod.
+# Headless Service (clusterIP: None): DNS name <release> points straight at the pod.
 apiVersion: v1
 kind: Service
 metadata:
-  name: railbook-postgres
+  name: {{ .Release.Name }}
 spec:
   clusterIP: None
   selector:
-    app.kubernetes.io/name: railbook-postgres
+    app.kubernetes.io/name: {{ .Release.Name }}
   ports:
     - name: postgres
       port: 5432
@@ -33,24 +50,24 @@ spec:
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: railbook-postgres
+  name: {{ .Release.Name }}
 spec:
-  serviceName: railbook-postgres
+  serviceName: {{ .Release.Name }}
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: railbook-postgres
+      app.kubernetes.io/name: {{ .Release.Name }}
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: railbook-postgres
+        app.kubernetes.io/name: {{ .Release.Name }}
         # Opt-in for the Vault Agent Injector webhook (deploy/vault/values.yaml: objectSelector).
         vault-agent-inject: "true"
       annotations:
         # Vault Agent Injector: before Postgres starts, an init container logs into Vault as
         # this pod's service account and writes /vault/secrets/postgres.env.
         vault.hashicorp.com/agent-inject: "true"
-        # Init container only, no sidecar: the password is only read on first start.
+        # Init container only, no sidecar: the passwords are only read on first start.
         vault.hashicorp.com/agent-pre-populate-only: "true"
         vault.hashicorp.com/role: {{ .Values.vault.role | quote }}
         vault.hashicorp.com/agent-inject-secret-postgres.env: {{ .Values.vault.adminPasswordPath | quote }}
@@ -58,8 +75,14 @@ spec:
           {{`{{- with secret "`}}{{ .Values.vault.adminPasswordPath }}{{`" -}}`}}
           export POSTGRES_PASSWORD="{{`{{ .Data.data.password }}`}}"
           {{`{{- end }}`}}
+          {{- if .Values.vault.appUserPath }}
+          {{`{{- with secret "`}}{{ .Values.vault.appUserPath }}{{`" }}`}}
+          export APP_DB_USER="{{`{{ .Data.data.username }}`}}"
+          export APP_DB_PASSWORD="{{`{{ .Data.data.password }}`}}"
+          {{`{{- end }}`}}
+          {{- end }}
     spec:
-      serviceAccountName: railbook-postgres
+      serviceAccountName: {{ .Release.Name }}
       containers:
         - name: postgres
           image: {{ .Values.image }}
@@ -89,7 +112,7 @@ spec:
       volumes:
         - name: init
           configMap:
-            name: railbook-postgres-init
+            name: {{ .Release.Name }}-init
   # One PersistentVolumeClaim per replica, kept when pods restart (kind's local-path storage).
   volumeClaimTemplates:
     - metadata:

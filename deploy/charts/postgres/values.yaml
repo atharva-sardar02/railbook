@@ -1,7 +1,7 @@
 image: postgres:16-alpine
 database: railbook
 # Group role that owns the tables. Vault's short-lived users are created IN this role,
-# and the app switches to it on connect (app/db.py: SET ROLE).
+# and the app switches to it on connect (app/db.py: SET ROLE). Empty = not created.
 ownerRole: railbook_owner
 storage: 1Gi
 resources:
@@ -12,3 +12,6 @@ vault:
   # Vault Kubernetes-auth role and KV path for the admin password (scripts/vault-setup.sh).
   role: railbook-postgres
   adminPasswordPath: secret/data/railbook/postgres-admin
+  # KV path with username + password of a fixed login that owns the database (02-app-user.sh).
+  # Empty = none (RailBook's API gets short-lived users from Vault instead).
+  appUserPath: ""

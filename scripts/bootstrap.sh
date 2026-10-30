@@ -63,6 +63,11 @@ helm upgrade --install railbook-postgres deploy/charts/postgres \
   -n railbook --create-namespace --wait --timeout 5m
 scripts/vault-setup.sh database
 
+step "Keycloak's Postgres (passwords from Vault)"
+# Same chart, second release: its own pod, disk and passwords, in the keycloak namespace.
+helm upgrade --install keycloak-postgres deploy/charts/postgres \
+  -n keycloak --create-namespace -f deploy/keycloak/postgres-values.yaml --wait --timeout 5m
+
 if [ -z "$IMAGE_TAG" ]; then
   # Local build. Tag = the image's content hash, so new code => new tag => Helm sees a change
   # and rolls the pods. A fixed tag like "dev" would never change, so `helm upgrade` would
