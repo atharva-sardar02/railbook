@@ -5,6 +5,11 @@ system on 2026-10-24 against the pipeline's release (Helm revision 19, image
 `ghcr.io/atharva-sardar02/railbook:d77cae4`, merge of PR #5). Each result says what was run and
 what came back, so it can be repeated. (Terms: [00-glossary](00-glossary.md).)
 
+> **Update 2026-10-29.** This is the record of 2026-10-24. Bugs found afterwards (API dying
+> after 1 h, pods without Vault containers, Grafana memory, an alert that didn't fire) and how
+> each fix was verified: [STATUS — bugs found after block 6](../STATUS.md#bugs-found-after-block-6).
+> The credential flow described below changed: the DB user now comes from `/vault/secrets/db.json`.
+
 **Summary:** 6 of 6 "done when" criteria hold; 11 of 12 factors hold in full, factor X in part
 (section 3), recorded as a known gap by decision, with the PRD's wording corrected. Two smaller findings: the deploy needs a token refreshed every 24 h (criterion 1),
 and CI's image build uses a layer cache, so a clean build was proven separately (factor II).

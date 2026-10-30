@@ -155,7 +155,10 @@ A methodology for cloud-ready apps. Key factors used in RailBook:
 - **Auth method (Kubernetes):** pods log in with their ServiceAccount token. A **role** maps a ServiceAccount to **policies**, which list the paths a workload may read (least privilege).
 - **KV v2:** a versioned key/value store for static secrets: the payment API key and the Grafana password.
 - **Database secrets engine:** creates short-lived Postgres users on demand (dynamic secrets). Each has a **lease** with a **TTL**, and Vault revokes it on expiry.
-- **Agent Injector:** a webhook that adds a Vault Agent container to pods. Its init container writes secrets to `/vault/secrets/` before the app starts, and an optional sidecar keeps renewing them.
+- **Agent Injector:** a webhook that adds a Vault Agent container to pods. Its init container writes secrets to `/vault/secrets/` before the app starts, and an optional sidecar keeps renewing them. Only pods labelled `vault-agent-inject: "true"` go through it, and it **fails closed**: if the injector can't be reached, the pod is refused (and retried later) rather than started without its secrets.
+- **Agent cache:** the init container hands its Vault token and leases to the sidecar, so the sidecar renews the same DB user the app started with instead of creating a second one.
+- **Lease renewal vs `max_ttl`:** renewing extends a lease (1 h at a time), but never past `max_ttl` (24 h). Then Vault issues a brand-new user; the sidecar rewrites `/vault/secrets/db.json`, and the app reads that file on every new DB connection.
+- **Failure policy (webhooks):** what Kubernetes does when it can't call an admission webhook. `Ignore` creates the object unchanged; `Fail` refuses it.
 
 ### CI/CD
 - **CI (Continuous Integration):** every PR is linted and tested automatically. **CD (Continuous Deployment):** merging to `main` deploys automatically.

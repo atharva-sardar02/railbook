@@ -19,6 +19,7 @@ open http://127.0.0.1/         # web frontend through Kong (API docs at /docs)
 | Grafana | http://grafana.localhost/ (dashboard: `/d/railbook`) | `admin` / `scripts/vault-read.sh secret/monitoring/grafana admin_password` |
 | Prometheus | http://prometheus.localhost/ | — |
 | Alertmanager | http://alertmanager.localhost/ | — |
+| Splunk | http://127.0.0.1:8000/ (start with `scripts/splunk.sh`) | any password works (Splunk Free has no authentication); the real one: `scripts/vault-read.sh secret/splunk/admin password` |
 
 All of them are published on `127.0.0.1` only.
 
@@ -34,3 +35,5 @@ Vault's unseal keys and root token are written to `~/.railbook/vault-init.json` 
 - [Block 4 — Prometheus and Grafana, explained](docs/learning/04-prometheus-grafana.md)
 - [Block 5 — Splunk and the log collector, explained](docs/learning/05-splunk.md)
 - [Block 6 — Verification against the PRD](docs/learning/06-verify.md)
+- [How the app flows — diagrams of every request, secret, metric and log path](docs/learning/app-flow.html)
+- [Bugs found after block 6 — causes, fixes, how each was verified](docs/STATUS.md#bugs-found-after-block-6)

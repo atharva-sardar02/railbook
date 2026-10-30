@@ -181,7 +181,7 @@ sequenceDiagram
   participant App as api container
   participant Side as vault-agent (sidecar)
 
-  K8s->>I: new pod has annotation vault.hashicorp.com/agent-inject
+  K8s->>I: new pod has label vault-agent-inject=true (webhook fails closed)<br/>+ annotation vault.hashicorp.com/agent-inject
   I-->>K8s: add an init container + a sidecar to the pod
   K8s->>Init: start first
   Init->>V: login with the pod's service account token (role railbook-api)
@@ -253,7 +253,7 @@ flowchart LR
 
 <table>
   <tr><th>Alert</th><th>Fires when</th></tr>
-  <tr><td>RailBookApiDown (critical)</td><td>Prometheus can't scrape any API pod</td></tr>
+  <tr><td>RailBookApiDown (critical)</td><td>Prometheus can't scrape any API pod, or no API pod is Ready</td></tr>
   <tr><td>RailBookHighErrorRate (warning)</td><td>More than 5 % of requests are 5xx for 2 min</td></tr>
   <tr><td>RailBookBookingsRateLimited (info)</td><td>Kong answered 429 on POST /bookings</td></tr>
   <tr><td>VaultSealedOrDown (critical)</td><td>Vault is sealed or unreachable</td></tr>

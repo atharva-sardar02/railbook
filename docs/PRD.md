@@ -1,6 +1,6 @@
 # RailBook — Product Requirements Document
 
-**Status:** Done, verified 2026-10-24 — see [STATUS.md](STATUS.md) and [06-verify](learning/06-verify.md) · **Date:** 2026-10-20 · **Timebox:** 1 day (~8 hours) · **Runs on:** your laptop only (WSL2 + kind)
+**Status:** Done, verified 2026-10-24; bugs found afterwards fixed 2026-10-29 — see [STATUS.md](STATUS.md) and [06-verify](learning/06-verify.md) · **Date:** 2026-10-20 · **Timebox:** 1 day (~8 hours) · **Runs on:** your laptop only (WSL2 + kind)
 
 ---
 
@@ -217,13 +217,13 @@ If running late, the day runs longer — nothing is cut. Building every piece, i
   |---|---|
   | kind node (API server, etcd, kubelet…) | ~1.2 GB |
   | Splunk (container `--memory=2g`) | 2.0 GB |
-  | kube-prometheus-stack (Prometheus capped at 512 MB, 1-day retention; Grafana 512 MB) | ~0.9 GB (measured) |
+  | kube-prometheus-stack (Prometheus capped at 512 MB, 1-day retention; Grafana 768 MB) | ~1.2 GB (measured 2026-10-29) |
   | Kong (proxy + controller) | ~0.3 GB |
   | Vault + injector | ~0.2 GB |
   | Postgres + API ×2 | ~0.4 GB |
   | Splunk OTel Collector (one DaemonSet pod, 256 MiB limit) | ~0.2 GB (measured) |
   | Self-hosted runner | ~0.2 GB |
-  | **Total** | **~5.4 GB**, leaving ~2.5 GB for WSL, Docker and image builds |
+  | **Total** | **~5.7 GB**, leaving ~2.2 GB for WSL, Docker and image builds. Measured 2026-10-29: kind node 3.7 GB (all pods 3.4 GB) + Splunk 1.4 GB |
 
   Scale the API to 3 replicas only to demonstrate factor VIII, then back to 2. If pods get `OOMKilled` or stay `Pending`, check `kubectl top` and the budget before anything else.
 - **Single node.** Use one control-plane node only; a multi-node cluster costs ~1 GB per node and teaches nothing extra here.
@@ -308,7 +308,7 @@ If running late, the day runs longer — nothing is cut. Building every piece, i
 |---|---|
 | Any cloud deployment (GKE, Artifact Registry, Cloud Logging) | Runs on your laptop only. |
 | Multi-node cluster, HA for anything | Not needed to learn the concepts; costs RAM. |
-| User accounts, login, roles | Not among the concepts. |
+| User accounts, login, roles | Not among the concepts. *2026-10-29: chosen as the next learning block (Keycloak, OIDC); not built yet — see STATUS.* |
 | Admin endpoints | Seed Job instead. |
 | Real payments | Mock only. |
 | Waitlist, RAC, Tatkal, seat maps | Domain complexity with no platform value. |
@@ -348,5 +348,10 @@ If running late, the day runs longer — nothing is cut. Building every piece, i
 | 2026-10-22 | Log collector written by hand as a DaemonSet instead of the Splunk OTel Collector Helm chart, so the HEC token comes from Vault as a file (`${file:}`), not a Kubernetes Secret (changes L2) |
 | 2026-10-24 | Factor X verified only in part (tests don't run against the deployed image or Vault); recorded as a known gap, no pipeline change (docs/learning/06-verify.md) |
 | 2026-10-24 | Two pipeline alerts: `LogsQueuedForSplunk` (warning, before loss) and `LogsDroppedBeforeSplunk` (critical, after the 5-minute retry window) |
+| 2026-10-29 | Vault Agent cache on (sidecar renews the init container's lease: one DB user per pod); the dynamic DB user is read from `/vault/secrets/db.json` on every new connection instead of an env var (changes §6.7) |
+| 2026-10-29 | Vault injector webhook fails closed (`failurePolicy: Fail`), applied only to pods labelled `vault-agent-inject: "true"`; injector anti-affinity off (one node) |
+| 2026-10-29 | Grafana memory limit 768 MiB |
+| 2026-10-29 | `RailBookApiDown` also fires when no API pod is Ready |
+| 2026-10-29 | Next learning block: authentication with Keycloak (OIDC, Authorization Code + PKCE); the API checks JWTs itself. Planned, not built |
 
 No open questions.

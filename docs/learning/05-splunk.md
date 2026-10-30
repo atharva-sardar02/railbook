@@ -168,7 +168,7 @@ vault write auth/kubernetes/role/log-collector \
 Only a pod running as service account `otel-collector` in namespace `logging` gets a token that
 can read exactly that one path.
 
-**2. Vault Agent writes a file** (pod annotations in the DaemonSet):
+**2. Vault Agent writes a file** (pod annotations in the DaemonSet; the pod also carries the label `vault-agent-inject: "true"`, which the injector webhook selects on since 2026-10-29):
 
 ```yaml
 vault.hashicorp.com/agent-inject: "true"
