@@ -33,3 +33,4 @@ Vault's unseal keys and root token are written to `~/.railbook/vault-init.json` 
 - [Block 3 — CI/CD, explained](docs/learning/03-ci-cd.md)
 - [Block 4 — Prometheus and Grafana, explained](docs/learning/04-prometheus-grafana.md)
 - [Block 5 — Splunk and the log collector, explained](docs/learning/05-splunk.md)
+- [Block 6 — Verification against the PRD](docs/learning/06-verify.md)

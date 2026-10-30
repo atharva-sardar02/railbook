@@ -1,6 +1,6 @@
 # RailBook — Product Requirements Document
 
-**Status:** In progress — see [STATUS.md](STATUS.md) · **Date:** 2026-10-20 · **Timebox:** 1 day (~8 hours) · **Runs on:** your laptop only (WSL2 + kind)
+**Status:** Done, verified 2026-10-24 — see [STATUS.md](STATUS.md) and [06-verify](learning/06-verify.md) · **Date:** 2026-10-20 · **Timebox:** 1 day (~8 hours) · **Runs on:** your laptop only (WSL2 + kind)
 
 ---
 
@@ -125,7 +125,7 @@ No user accounts: the passenger name is a field on the booking.
 | VII | Port binding | Uvicorn binds to `$PORT`; the app is self-contained. Kong routes to that port. | Change `PORT` in the ConfigMap; Service and Kong still route. |
 | VIII | Concurrency | Scale by adding pods, one Uvicorn worker per pod; Kong load-balances them. | `kubectl scale deploy/railbook-api --replicas=3`; Grafana shows 3 targets. |
 | IX | Disposability | Starts in seconds; handles `SIGTERM` gracefully (finish in-flight requests, close DB pool); readiness probe gates traffic. | `kubectl rollout restart` under load with zero failed requests. |
-| X | Dev/prod parity | Same image, same Postgres 16 and same Vault in CI tests and in kind. | Same tests pass in CI and as a smoke test in kind. |
+| X | Dev/prod parity | Same Postgres 16 image (by digest) in CI tests, local tests and kind; same lockfile for the tests and the image. **Known gap:** tests run the source, not the built image, and use env config instead of Vault; kind gets a 2-URL smoke test only (verified 2026-10-24, kept as is). | Same 11 tests pass in CI and locally; Postgres digests match; smoke test passes after each deploy. |
 | XI | Logs | API and Kong write JSON events to stdout only. The platform (OTel Collector) routes them to Splunk. | No log files in the container; no Splunk code in the app. |
 | XII | Admin processes | Seed data runs as a one-off Kubernetes Job using the same image and config as the API. | `kubectl get jobs -n railbook` shows the seed Job. |
 
@@ -346,6 +346,7 @@ If running late, the day runs longer — nothing is cut. Building every piece, i
 | 2026-10-22 | App's ServiceMonitor, alerts and dashboard ship in the app chart (deployed by the pipeline) |
 | 2026-10-22 | Prometheus, Grafana, Alertmanager UIs through Kong at `*.localhost` (127.0.0.1 only) |
 | 2026-10-22 | Log collector written by hand as a DaemonSet instead of the Splunk OTel Collector Helm chart, so the HEC token comes from Vault as a file (`${file:}`), not a Kubernetes Secret (changes L2) |
+| 2026-10-24 | Factor X verified only in part (tests don't run against the deployed image or Vault); recorded as a known gap, no pipeline change (docs/learning/06-verify.md) |
 | 2026-10-24 | Two pipeline alerts: `LogsQueuedForSplunk` (warning, before loss) and `LogsDroppedBeforeSplunk` (critical, after the 5-minute retry window) |
 
 No open questions.
