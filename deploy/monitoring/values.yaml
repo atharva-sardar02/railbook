@@ -73,6 +73,9 @@ grafana:
   env:
     GF_SECURITY_ADMIN_USER: admin
     GF_SECURITY_ADMIN_PASSWORD: $__file{/vault/secrets/admin-password}
+  # Opt-in for the Vault Agent Injector webhook (deploy/vault/values.yaml: objectSelector).
+  podLabels:
+    vault-agent-inject: "true"
   podAnnotations:
     vault.hashicorp.com/agent-inject: "true"
     vault.hashicorp.com/role: grafana
@@ -111,10 +114,11 @@ grafana:
 
   # Grafana 12 needs ~250 MB just to start (it runs ~50 internal apps and DB migrations).
   # At a 256Mi limit the Go garbage collector ran nonstop near the limit, start-up took minutes
-  # and the liveness probe killed it in a loop. 512Mi gives it headroom.
+  # and the liveness probe killed it in a loop. Grafana 13 under login + dashboard load then
+  # reached 484 MiB at a 512Mi limit, stalled and was killed by liveness (exit 137); 768Mi.
   resources:
     requests: { cpu: 50m, memory: 192Mi }
-    limits: { memory: 512Mi }
+    limits: { memory: 768Mi }
 
 kube-state-metrics:
   resources:

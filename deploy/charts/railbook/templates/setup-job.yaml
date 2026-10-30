@@ -20,6 +20,8 @@ spec:
       labels:
         app.kubernetes.io/name: railbook-setup
         {{- include "railbook.labels" . | nindent 8 }}
+        # Opt-in for the Vault Agent Injector webhook (deploy/vault/values.yaml: objectSelector).
+        vault-agent-inject: "true"
       annotations:
         # Init container only. A sidecar never exits, and a Job only completes when every
         # container has exited — with a sidecar this Job would run forever.

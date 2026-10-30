@@ -56,6 +56,22 @@ injector:
   resources:
     requests: { cpu: 25m, memory: 32Mi }
     limits: { memory: 96Mi }
+  # The chart's anti-affinity forbids two injector pods on one node. With one node, a
+  # `kubectl rollout restart` (start new pod, then stop old) could never schedule the new pod.
+  affinity: ""
+  webhook:
+    # Fail closed: if the API server can't reach the injector (e.g. its TLS CA in the webhook
+    # config is stale), refuse to create the pod. The ReplicaSet/Job keeps retrying and the pod
+    # is created, with its Vault containers, once the injector works. The chart's default,
+    # Ignore, creates the pod WITHOUT them; it then crash-loops on a missing /vault/secrets file.
+    failurePolicy: Fail
+    # Fail closed must not block unrelated pods (kube-system, Kong, Prometheus...) when the
+    # injector is down, so only pods that opt in with this label go through the webhook. The
+    # injector's own pod doesn't carry it, so it can always start. (A string, like the chart's
+    # default, so Helm replaces the default instead of warning about merging a map into it.)
+    objectSelector: |
+      matchLabels:
+        vault-agent-inject: "true"
   # Defaults for the agent containers injected into app pods. The chart's defaults
   # (250m CPU, 64-128Mi each) are sized for production; ours serve a few requests a minute.
   agentDefaults:

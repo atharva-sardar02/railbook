@@ -122,7 +122,7 @@ who is already root-equivalent on this machine. Vault stays the source of truth.
 | `-p 127.0.0.1:8000:8000` | Web UI on your machine only. **8088 is not published**: only the cluster sends logs |
 | `--memory 2g` | Hard cap; Splunk would otherwise take what it can of the 8 GB WSL budget |
 | `SPLUNK_START_ARGS=--accept-license`, `SPLUNK_GENERAL_TERMS=...` | Required to start the image non-interactively |
-| `SPLUNK_LICENSE_URI=Free` | Free license: 500 MB/day indexed, and **authentication off**: the management API answered without any credentials. That's why nothing is published beyond `127.0.0.1` |
+| `SPLUNK_LICENSE_URI=Free` | Free license: 500 MB/day indexed, and **authentication off**. The management API (8089) answers with no credentials or wrong ones. The web UI still shows a login form, but it accepts any password, even an empty one (checked 2026-10-29: a wrong password gets a session that opens the search app). That's why nothing is published beyond `127.0.0.1` |
 | `SPLUNK_PASSWORD` | Admin password (the image's provisioning sets it) |
 | `SPLUNK_HEC_TOKEN` | Creates and enables an HEC input with exactly this token, default index `main` |
 | `-v splunk-var:/opt/splunk/var`, `-v splunk-etc:/opt/splunk/etc` | Indexed data and config survive deleting the container |
@@ -575,7 +575,7 @@ it is (as long as the collector hasn't spent 5 minutes failing on them).
 
 ```bash
 scripts/splunk.sh                                       # start Splunk (each session)
-scripts/vault-read.sh secret/splunk/admin password      # if the web UI shows a login page: admin + this
+scripts/vault-read.sh secret/splunk/admin password      # admin password (the Free license's login form accepts any password)
 kubectl -n logging logs ds/otel-collector               # collector's own log
 ```
 

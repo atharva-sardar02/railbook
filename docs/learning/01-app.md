@@ -82,7 +82,7 @@ Factor III: anything that changes between environments (hosts, passwords, ports)
 
 - **`BaseSettings`** fills each field from the matching env var: `DB_HOST` → `db_host`, `PORT` → `port`. It converts types (`PORT="9000"` → `9000`), so a bad value fails at startup, not mid-request.
 - **`SecretStr`** prints as `**********`. If the settings object is ever logged by mistake, the password doesn't reach Splunk. You must call `.get_secret_value()` deliberately.
-- **Username and password are separate fields, not one `DATABASE_URL`.** Vault generates a username and password per pod. The Vault Agent template renders just `DB_USER` and `DB_PASSWORD`; host and port come from a plain ConfigMap. Secret and non-secret config stay apart.
+- **Username and password are separate fields, not one `DATABASE_URL`.** Vault generates a username and password per pod. Locally (and in tests) they come from `DB_USER` and `DB_PASSWORD`. In the cluster Vault Agent renders them to `/vault/secrets/db.json` and `DB_CREDENTIALS_FILE` points there: `app/db.py` reads the file on every new connection, because Vault replaces the user while the pod runs. Host and port come from a plain ConfigMap. Secret and non-secret config stay apart.
 - **`@lru_cache` on `get_settings()`** reads settings once. Env vars don't change while a process runs.
 
 ---

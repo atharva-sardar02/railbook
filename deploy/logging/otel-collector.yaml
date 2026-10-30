@@ -129,6 +129,8 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: otel-collector
+        # Opt-in for the Vault Agent Injector webhook (deploy/vault/values.yaml: objectSelector).
+        vault-agent-inject: "true"
       annotations:
         # Vault Agent init container: log in as otel-collector, write the HEC token (only the
         # token, whitespace trimmed) to /vault/secrets/hec-token, exit. No sidecar: it's static.

@@ -12,3 +12,5 @@ data:
   DB_PORT: "5432"
   DB_NAME: {{ .Values.database.name | quote }}
   DB_ROLE: {{ .Values.database.ownerRole | quote }}
+  # Rendered by Vault Agent (templates/_helpers.tpl); holds the dynamic DB user + password.
+  DB_CREDENTIALS_FILE: /vault/secrets/db.json

@@ -108,7 +108,8 @@ vault write database/config/railbook \
 # Each request for database/creds/railbook-api runs creation_statements with a new name and
 # password. Users join railbook_owner (owner of the tables; the app does SET ROLE to it).
 # default_ttl: lease length; the injected agent sidecar renews it while the pod lives.
-# max_ttl: hard limit; after it the app must restart to pick up new credentials.
+# max_ttl: hard limit; then the sidecar gets a NEW user and rewrites /vault/secrets/db.json,
+#          which the app reads on every new connection (app/db.py), so no restart is needed.
 vault write database/roles/railbook-api \
   db_name=railbook \
   default_ttl=1h max_ttl=24h \

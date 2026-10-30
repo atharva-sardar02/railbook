@@ -252,7 +252,7 @@ If running late, the day runs longer — nothing is cut. Building every piece, i
 - **Audience.** Roles check the token's `aud` claim (`https://kubernetes.default.svc.cluster.local` on kind) so tokens issued for other services are rejected.
 - **Kubernetes auth.** Each Vault role is bound to one service account + namespace. A typo in either gives `permission denied` with little detail — check `vault read auth/kubernetes/role/<role>` first.
 - **Database engine.** Vault connects to Postgres as an admin user to create short-lived users. Postgres must be up before `vault-setup.sh` runs, and the creation SQL must grant the right table privileges or the API gets `permission denied for table`.
-- **TTL.** Credentials are read at startup (§6.7). The sidecar renews the 1 h lease up to the 24 h `max_ttl`; after that the pod must restart to pick up a new user. Pods that die without renewing (and the setup Job's user) are dropped by Vault within an hour.
+- **TTL.** The sidecar renews the 1 h lease up to the 24 h `max_ttl`; then it gets a new user. Pods that die without renewing (and the setup Job's user) are dropped by Vault within an hour. *Changed 2026-10-29 (see STATUS, bugs after block 6):* `agent-cache-enable` makes the sidecar renew the init container's lease instead of creating a second user, and the DB user is read from `/vault/secrets/db.json` on every new connection, so a new user needs no restart.
 - **HEC token for the OTel Collector.** Must come from Vault like every other secret. The collector image has no shell, so the env-file trick in §6.7 doesn't work for it; the delivery method is decided in block 6.
 - **License.** Vault uses the Business Source License, free for learning and internal use.
 
@@ -268,7 +268,7 @@ If running late, the day runs longer — nothing is cut. Building every piece, i
 
 - **Networking.** Run Splunk with `--network kind` so the kind node can reach it by container name (`splunk:8088`). Splunk then lives outside the cluster, so `kind delete cluster` doesn't lose logs or saved searches.
 - **500 MB/day cap.** Filter the collector to the `railbook` and `kong` namespaces. Going over the cap repeatedly blocks search on the Free license.
-- **Web UI exposure.** Splunk Free has no login. Publish port 8000 on `127.0.0.1` only.
+- **Web UI exposure.** Splunk Free has no authentication: its login form accepts any password. Publish port 8000 on `127.0.0.1` only.
 - **TLS.** HEC uses a self-signed certificate by default. Set the collector's `tls.insecure_skip_verify: true` — acceptable on a single machine.
 - **Persistence.** Mount Docker volumes for `/opt/splunk/var` and `/opt/splunk/etc`.
 
@@ -290,7 +290,7 @@ If running late, the day runs longer — nothing is cut. Building every piece, i
 ### 6.7 Twelve-Factor
 
 - **Config (III) vs Vault.** Twelve-Factor says config comes from environment variables. The Vault Agent Injector writes secrets to a **file** (`/vault/secrets/…`). Resolution: the agent template renders `export DB_USER=… DB_PASSWORD=…`, and the container command runs `. /vault/secrets/db && exec uvicorn …`. The app only reads env vars and knows nothing about Vault.
-- **Consequence:** env vars are read once at startup, so a rotated DB credential needs a pod restart. That fits Disposability (IX).
+- **Consequence:** env vars are read once at startup, so a rotated DB credential needs a pod restart. That fits Disposability (IX). *Changed 2026-10-29:* the dynamic DB user is the exception. It changes while the pod runs, so the app reads it from the rendered file (`DB_CREDENTIALS_FILE`, itself plain config) on each new connection. Static secrets (payment key) stay env vars.
 - **Keep secrets out of plain env vars elsewhere.** Never put them in the ConfigMap, Helm values or workflow files; env vars show up in `kubectl describe`.
 - **Logs (XI).** No Splunk handler in Python. The app writes to stdout; shipping is the platform's job.
 - **Admin processes (XII).** The seed Job may run on every deploy. Make it idempotent (`INSERT … ON CONFLICT DO NOTHING`) and give each run a unique Job name (or delete the old Job first), since Jobs are immutable.

@@ -12,12 +12,16 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     shutdown_grace_seconds: int = 20
 
-    # Backing service: Postgres (factor IV). User/password are rendered by Vault Agent.
+    # Backing service: Postgres (factor IV).
     db_host: str = "localhost"
     db_port: int = 5432
     db_name: str = "railbook"
+    # Local runs and tests set the user/password directly...
     db_user: str = "railbook"
     db_password: SecretStr = SecretStr("")
+    # ...in the cluster, Vault Agent renders them into this JSON file ({"username", "password"})
+    # and replaces it when Vault rotates the user. Read on every new connection (app/db.py).
+    db_credentials_file: str | None = None
     # Group role that owns the tables. Vault's short-lived users are members of it
     # and switch to it on connect, so tables never belong to a user that expires.
     db_role: str | None = None
