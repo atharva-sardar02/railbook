@@ -21,6 +21,14 @@ database:
   # Group role that owns the tables (see app/db.py: SET ROLE).
   ownerRole: railbook_owner
 
+# Keycloak (deploy/charts/keycloak). The issuer is the public URL in the tokens; the keys are
+# fetched from the in-cluster Service, so the API doesn't depend on Kong to check a token.
+oidc:
+  issuer: http://auth.localhost/realms/railbook
+  jwksUrl: http://keycloak.keycloak.svc:8080/realms/railbook/protocol/openid-connect/certs
+  audience: railbook-api
+  adminRole: railbook-admin
+
 # All secrets come from Vault (scripts/vault-setup.sh configures these paths and the role).
 vault:
   role: railbook-api

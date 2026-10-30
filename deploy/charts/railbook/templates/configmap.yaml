@@ -14,3 +14,8 @@ data:
   DB_ROLE: {{ .Values.database.ownerRole | quote }}
   # Rendered by Vault Agent (templates/_helpers.tpl); holds the dynamic DB user + password.
   DB_CREDENTIALS_FILE: /vault/secrets/db.json
+  # Login: which tokens to accept and where Keycloak's public keys are (app/auth.py).
+  OIDC_ISSUER: {{ .Values.oidc.issuer | quote }}
+  OIDC_JWKS_URL: {{ .Values.oidc.jwksUrl | quote }}
+  OIDC_AUDIENCE: {{ .Values.oidc.audience | quote }}
+  OIDC_ADMIN_ROLE: {{ .Values.oidc.adminRole | quote }}

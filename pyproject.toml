@@ -13,6 +13,7 @@ dependencies = [
     "prometheus-client",
     "prometheus-fastapi-instrumentator",
     "alembic>=1.20.0",
+    "pyjwt[crypto]>=2.15.1",
 ]
 
 [dependency-groups]
