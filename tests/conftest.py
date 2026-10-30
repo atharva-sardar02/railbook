@@ -11,6 +11,7 @@ os.environ.setdefault("LOG_LEVEL", "WARNING")
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
+from sqlalchemy import text  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 
 from app.admin import setup  # noqa: E402
@@ -23,6 +24,9 @@ from app.models import Base  # noqa: E402
 def fresh_db():
     engine = get_engine()
     Base.metadata.drop_all(engine)
+    # Forget applied migrations too, so setup() runs them all again on the empty database.
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
     with Session(engine) as session:
         setup(session)
     yield

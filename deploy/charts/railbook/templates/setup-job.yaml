@@ -1,7 +1,14 @@
-# Factor XII: the admin process (create tables + seed) runs as a one-off Job,
+# Factor XII: the admin process (migrate the schema + seed) runs as a one-off Job,
 # with the same image, environment and Vault secrets as the API.
 #
-# It is a Helm hook: Helm runs it after every install and upgrade.
+# It is a Helm hook. On upgrade it runs BEFORE the new API pods (pre-upgrade): new code may
+# need the new schema, so the migration must come first. Migrations are therefore written so
+# the old code still works on the new schema while it keeps serving (e.g. add a nullable
+# column; never rename or drop in the same release). If the Job fails, the upgrade stops and
+# the old pods keep running.
+# On first install it runs after the release (post-install): before that, the service account
+# and ConfigMap it uses don't exist yet.
+#
 # Jobs can't be edited once created, so before-hook-creation deletes the previous
 # run's Job first. The finished Job is kept so you can inspect it (kubectl logs job/...).
 apiVersion: batch/v1
@@ -11,7 +18,7 @@ metadata:
   labels:
     {{- include "railbook.labels" . | nindent 4 }}
   annotations:
-    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook: post-install,pre-upgrade
     helm.sh/hook-delete-policy: before-hook-creation
 spec:
   backoffLimit: 4
