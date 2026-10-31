@@ -93,9 +93,7 @@ def create_booking(
     return _to_out(booking, schedule)
 
 
-def _load(
-    session: Session, pnr: str, user: User, lock: bool = False
-) -> tuple[Booking, Schedule]:
+def _load(session: Session, pnr: str, user: User, lock: bool = False) -> tuple[Booking, Schedule]:
     query = select(Booking, Schedule).join(Schedule).where(Booking.pnr == pnr)
     if lock:
         query = query.with_for_update(of=Booking)

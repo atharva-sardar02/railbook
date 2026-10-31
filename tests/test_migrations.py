@@ -21,12 +21,14 @@ def test_database_from_before_alembic_is_upgraded():
         command.upgrade(alembic_config(conn), "0001")
         conn.execute(text("DROP TABLE alembic_version"))
         conn.execute(text("INSERT INTO stations VALUES ('AAA', 'A'), ('BBB', 'B')"))
-        conn.execute(text(
-            "INSERT INTO trains VALUES ('1', 'T', 'AAA', 'BBB', '10:00', '12:00');"
-            "INSERT INTO schedules (train_number, travel_date) VALUES ('1', '2026-01-01');"
-            "INSERT INTO bookings (pnr, schedule_id, class_code, passenger_name, seats, amount,"
-            " status) SELECT 'OLD1', id, 'SL', 'Old', 1, 650, 'CONFIRMED' FROM schedules"
-        ))
+        conn.execute(
+            text(
+                "INSERT INTO trains VALUES ('1', 'T', 'AAA', 'BBB', '10:00', '12:00');"
+                "INSERT INTO schedules (train_number, travel_date) VALUES ('1', '2026-01-01');"
+                "INSERT INTO bookings (pnr, schedule_id, class_code, passenger_name, seats, amount,"
+                " status) SELECT 'OLD1', id, 'SL', 'Old', 1, 650, 'CONFIRMED' FROM schedules"
+            )
+        )
 
     with Session(engine) as session:
         setup(session)

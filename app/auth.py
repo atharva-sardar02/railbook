@@ -39,9 +39,7 @@ def jwks_client() -> jwt.PyJWKClient:
     # cache_keys: a key, once seen, is kept (per kid, no expiry) until the pod restarts, so
     # logged-in users keep working while Keycloak is down. Trade-off: a key Keycloak removes
     # (e.g. leaked) stays trusted by running pods until they restart.
-    return jwt.PyJWKClient(
-        get_settings().oidc_jwks_url, cache_keys=True, lifespan=300, timeout=5
-    )
+    return jwt.PyJWKClient(get_settings().oidc_jwks_url, cache_keys=True, lifespan=300, timeout=5)
 
 
 def _unauthorized(detail: str) -> HTTPException:

@@ -50,8 +50,12 @@ class FakeJWKS:
         if jwt.get_unverified_header(token).get("kid") != KID:
             raise jwt.PyJWKClientError("Unable to find a signing key that matches")
         return jwt.PyJWK.from_dict(
-            {**jwt.algorithms.RSAAlgorithm.to_jwk(PRIVATE_KEY.public_key(), as_dict=True),
-             "kid": KID, "alg": "RS256", "use": "sig"}
+            {
+                **jwt.algorithms.RSAAlgorithm.to_jwk(PRIVATE_KEY.public_key(), as_dict=True),
+                "kid": KID,
+                "alg": "RS256",
+                "use": "sig",
+            }
         )
 
 
@@ -59,9 +63,14 @@ def make_token(sub=ALICE, roles=(), key=PRIVATE_KEY, kid=KID, **claims):
     settings = get_settings()
     now = int(time.time())
     payload = {
-        "iss": settings.oidc_issuer, "aud": settings.oidc_audience, "sub": sub,
-        "iat": now, "exp": now + 300, "preferred_username": sub,
-        "realm_access": {"roles": list(roles)}, **claims,
+        "iss": settings.oidc_issuer,
+        "aud": settings.oidc_audience,
+        "sub": sub,
+        "iat": now,
+        "exp": now + 300,
+        "preferred_username": sub,
+        "realm_access": {"roles": list(roles)},
+        **claims,
     }
     return jwt.encode(payload, key, algorithm="RS256", headers={"kid": kid})
 

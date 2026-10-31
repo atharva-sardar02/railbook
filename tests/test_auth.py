@@ -55,15 +55,22 @@ BAD_TOKENS = {
     ),
     "unknown key id": lambda: make_token(kid="not-in-jwks"),
     "alg none": lambda: jwt.encode(
-        jwt.decode(make_token(), options={"verify_signature": False}), None, algorithm="none",
+        jwt.decode(make_token(), options={"verify_signature": False}),
+        None,
+        algorithm="none",
         headers={"kid": "test-key"},  # a known kid, so it reaches the algorithm check
     ),
     "HS256 with the public key": hs256_signed_with_public_key,
     "payload changed": tampered,
     "no sub": lambda: jwt.encode(
-        {k: v for k, v in jwt.decode(make_token(), options={"verify_signature": False}).items()
-         if k != "sub"},
-        PRIVATE_KEY, algorithm="RS256", headers={"kid": "test-key"},
+        {
+            k: v
+            for k, v in jwt.decode(make_token(), options={"verify_signature": False}).items()
+            if k != "sub"
+        },
+        PRIVATE_KEY,
+        algorithm="RS256",
+        headers={"kid": "test-key"},
     ),
 }
 
@@ -77,8 +84,12 @@ def test_search_needs_no_login(anon):
 
 @pytest.mark.parametrize(
     ("method", "path"),
-    [("POST", "/bookings"), ("GET", "/bookings"), ("GET", "/bookings/0000000000"),
-     ("DELETE", "/bookings/0000000000")],
+    [
+        ("POST", "/bookings"),
+        ("GET", "/bookings"),
+        ("GET", "/bookings/0000000000"),
+        ("DELETE", "/bookings/0000000000"),
+    ],
 )
 def test_bookings_need_a_token(anon, method, path):
     resp = anon.request(method, path, json={} if method == "POST" else None)
@@ -97,8 +108,14 @@ def test_owner_is_taken_from_the_token(anon):
     resp = anon.post(
         "/bookings",
         headers=ALICE_H,
-        json={"train_number": "12952", "travel_date": TODAY, "class_code": "3A",
-              "passenger_name": "Asha", "seats": 1, "user_id": BOB},
+        json={
+            "train_number": "12952",
+            "travel_date": TODAY,
+            "class_code": "3A",
+            "passenger_name": "Asha",
+            "seats": 1,
+            "user_id": BOB,
+        },
     )
     assert resp.status_code == 201
     with Session(get_engine()) as s:
@@ -107,9 +124,15 @@ def test_owner_is_taken_from_the_token(anon):
 
 def test_only_owner_or_admin_can_see_and_cancel(anon):
     pnr = anon.post(
-        "/bookings", headers=ALICE_H,
-        json={"train_number": "12952", "travel_date": TODAY, "class_code": "3A",
-              "passenger_name": "Asha", "seats": 1},
+        "/bookings",
+        headers=ALICE_H,
+        json={
+            "train_number": "12952",
+            "travel_date": TODAY,
+            "class_code": "3A",
+            "passenger_name": "Asha",
+            "seats": 1,
+        },
     ).json()["pnr"]
 
     assert anon.get(f"/bookings/{pnr}", headers=BOB_H).status_code == 403
@@ -123,16 +146,20 @@ def test_only_owner_or_admin_can_see_and_cancel(anon):
 def test_list_shows_only_your_bookings(client, anon):
     alice_pnr = book(client).json()["pnr"]
     bob_pnr = anon.post(
-        "/bookings", headers=BOB_H,
-        json={"train_number": "12952", "travel_date": TODAY, "class_code": "SL",
-              "passenger_name": "Bob", "seats": 1},
+        "/bookings",
+        headers=BOB_H,
+        json={
+            "train_number": "12952",
+            "travel_date": TODAY,
+            "class_code": "SL",
+            "passenger_name": "Bob",
+            "seats": 1,
+        },
     ).json()["pnr"]
 
     assert [b["pnr"] for b in anon.get("/bookings", headers=ALICE_H).json()] == [alice_pnr]
     assert [b["pnr"] for b in anon.get("/bookings", headers=BOB_H).json()] == [bob_pnr]
-    assert {b["pnr"] for b in anon.get("/bookings", headers=ADMIN_H).json()} == {
-        alice_pnr, bob_pnr
-    }
+    assert {b["pnr"] for b in anon.get("/bookings", headers=ADMIN_H).json()} == {alice_pnr, bob_pnr}
 
 
 def test_bookings_from_before_login_are_admin_only(client, anon):
