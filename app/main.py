@@ -76,6 +76,14 @@ async def request_context(request: Request, call_next) -> Response:
             )
 
 
+@app.get("/auth-config", include_in_schema=False)
+def auth_config() -> dict:
+    """Where the frontend logs in (factor III: config from the environment, not from app.js).
+    Public values only."""
+    settings = get_settings()
+    return {"issuer": settings.oidc_issuer, "client_id": settings.oidc_client_id}
+
+
 @app.get("/healthz", include_in_schema=False)
 def healthz() -> dict:
     return {"status": "ok"}

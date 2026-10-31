@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     )
     # "aud" every token must contain: tokens issued for other apps are refused.
     oidc_audience: str = "railbook-api"
+    # The frontend's client in Keycloak (public client, PKCE); sent to the browser.
+    oidc_client_id: str = "railbook-web"
     # Realm role that may see and cancel every booking.
     oidc_admin_role: str = "railbook-admin"
 

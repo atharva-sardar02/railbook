@@ -19,3 +19,4 @@ data:
   OIDC_JWKS_URL: {{ .Values.oidc.jwksUrl | quote }}
   OIDC_AUDIENCE: {{ .Values.oidc.audience | quote }}
   OIDC_ADMIN_ROLE: {{ .Values.oidc.adminRole | quote }}
+  OIDC_CLIENT_ID: {{ .Values.oidc.clientId | quote }}

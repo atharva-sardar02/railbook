@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>RailBook</title>
   <link rel="stylesheet" href="/static/styles.css">
+  <!-- defer keeps this order: auth.js defines Auth before app.js uses it. -->
+  <script src="/static/auth.js" defer></script>
   <script src="/static/app.js" defer></script>
 </head>
 <body>
@@ -12,6 +14,7 @@
     <div class="wrap">
       <span class="logo">RailBook</span>
       <span class="tagline">Train tickets, minus the queue</span>
+      <div id="account" class="account"></div>
     </div>
   </header>
 
@@ -36,7 +39,8 @@
     <section id="results" aria-live="polite"></section>
 
     <section class="card" aria-labelledby="pnr-title">
-      <h2 id="pnr-title">My booking</h2>
+      <h2 id="pnr-title">My bookings</h2>
+      <div id="my-bookings"></div>
       <form id="pnr-form" class="pnr-row">
         <input id="pnr" inputmode="numeric" pattern="[0-9]{10}" maxlength="10"
                placeholder="10-digit PNR" aria-label="PNR" required>

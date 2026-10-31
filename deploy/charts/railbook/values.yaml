@@ -28,6 +28,7 @@ oidc:
   jwksUrl: http://keycloak.keycloak.svc:8080/realms/railbook/protocol/openid-connect/certs
   audience: railbook-api
   adminRole: railbook-admin
+  clientId: railbook-web
 
 # All secrets come from Vault (scripts/vault-setup.sh configures these paths and the role).
 vault:

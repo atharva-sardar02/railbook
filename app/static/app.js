@@ -6,6 +6,8 @@ const $ = (id) => document.getElementById(id);
 
 // Messages for the API's status codes; 429 comes from Kong's rate limit, not the API.
 const ERRORS = {
+  401: "Please log in (top right). If you were logged in, your session has ended.",
+  403: "That booking belongs to another account.",
   402: "Payment was declined. No seats were taken.",
   404: "Not found.",
   409: null, // the API's own message ("only N seats left", "already cancelled") is clearer
@@ -15,11 +17,16 @@ const ERRORS = {
 
 // fetch() wrapper: returns { ok, status, data, requestId }.
 // requestId is the X-Request-ID set by Kong — the key to find this request in Splunk.
-async function api(path, options = {}) {
+// Sends the access token when logged in. On 401 it renews the token once and retries
+// (e.g. the laptop slept past the token's 5 minutes).
+async function api(path, options = {}, retried = false) {
   const res = await fetch(path, {
     ...options,
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    headers: { "Content-Type": "application/json", ...(await Auth.headers()), ...(options.headers || {}) },
   });
+  if (res.status === 401 && Auth.user() && !retried && (await Auth.refresh())) {
+    return api(path, options, true);
+  }
   let data = null;
   try { data = await res.json(); } catch { /* empty or non-JSON body */ }
   return { ok: res.ok, status: res.status, data, requestId: res.headers.get("X-Request-ID") };
@@ -133,6 +140,7 @@ function trainCard(train) {
 let pending = null;
 
 function openBooking(train, cls) {
+  if (!Auth.user()) return toast("Log in (top right) to book seats.", "error");
   pending = { train, cls };
   $("book-summary").textContent =
     `${train.name} #${train.number} · ${train.travel_date} · ${CLASS_NAMES[cls.class_code] || cls.class_code}`;
@@ -173,7 +181,43 @@ async function submitBooking(event) {
   toast(`Booked! PNR ${r.data.pnr}`, "success", r.requestId);
   $("pnr").value = r.data.pnr;
   showBooking(r.data, r.requestId);
+  loadMyBookings();
   if (lastSearch) search();
+}
+
+// ---------- Login state + my bookings ----------
+
+function renderAccount(user) {
+  const box = $("account");
+  if (!user) {
+    box.replaceChildren(el("button", { onclick: () => Auth.login() }, "Log in"));
+    return;
+  }
+  box.replaceChildren(
+    el("span", {}, user.name),
+    user.isAdmin ? el("span", { class: "role" }, "admin") : "",
+    el("button", { onclick: () => Auth.logout() }, "Log out"));
+}
+
+async function loadMyBookings() {
+  const box = $("my-bookings");
+  const user = Auth.user();
+  if (!user) {
+    box.replaceChildren(el("p", { class: "muted pad" }, "Log in to book seats and see your bookings."));
+    return;
+  }
+  const r = await api("/bookings");
+  if (!r.ok) return box.replaceChildren(el("p", { class: "muted pad" }, errorText(r)));
+  if (r.data.length === 0) {
+    return box.replaceChildren(el("p", { class: "muted pad" }, "No bookings yet."));
+  }
+  box.replaceChildren(
+    user.isAdmin ? el("p", { class: "muted" }, "Admin: everyone's bookings (latest 50).") : "",
+    el("ul", { class: "booking-list" }, ...r.data.map((b) => el("li", {},
+      el("button", { onclick: () => showBooking(b) },
+        el("span", { class: "pnr" }, b.pnr),
+        el("span", {}, `#${b.train_number} · ${b.travel_date} · ${b.passenger_name}`),
+        el("span", { class: `badge ${b.status === "CANCELLED" ? "badge-off" : "badge-ok"}` }, b.status))))));
 }
 
 // ---------- PNR lookup + cancel ----------
@@ -212,6 +256,7 @@ async function cancelBooking(pnr) {
   if (!r.ok) return toast(errorText(r), "error", r.requestId);
   toast(`Booking ${pnr} cancelled.`, "success", r.requestId);
   showBooking(r.data, r.requestId);
+  loadMyBookings();
   if (lastSearch) search();
 }
 
@@ -231,6 +276,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("book-cancel").addEventListener("click", () => $("book-dialog").close());
   $("seats").addEventListener("input", updateTotal);
   $("pnr-form").addEventListener("submit", lookup);
+
+  Auth.onChange((user) => { renderAccount(user); loadMyBookings(); });
+  try {
+    await Auth.init(); // may leave the page for a silent login after a reload
+  } catch (err) {
+    toast(err.message, "error");
+  }
 
   await loadStations();
   search();

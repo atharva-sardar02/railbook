@@ -196,3 +196,22 @@ dialog h2 { margin: 0; }
   .pnr-row { max-width: none; }
   .timeline .line { width: 28px; }
 }
+
+/* Login state in the top bar. */
+.account { margin-left: auto; display: flex; align-items: center; gap: 10px; font-size: 14px; }
+.account button {
+  border: 1px solid currentColor; background: transparent; color: inherit;
+  border-radius: 6px; padding: 4px 12px; cursor: pointer;
+}
+.role { font-size: 12px; padding: 1px 8px; border-radius: 999px; background: var(--brand-ink); color: var(--brand); }
+
+/* "My bookings" list. */
+.booking-list { list-style: none; margin: 0 0 14px; padding: 0; display: grid; gap: 6px; }
+.booking-list button {
+  width: 100%; display: flex; gap: 12px; align-items: center; text-align: left;
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px;
+  background: var(--card); color: var(--text); cursor: pointer;
+}
+.booking-list button:hover { border-color: var(--brand); }
+.booking-list .pnr { font-weight: 600; font-variant-numeric: tabular-nums; }
+.booking-list .badge { margin-left: auto; }
