@@ -70,4 +70,7 @@ class Booking(Base):
     seats: Mapped[int] = mapped_column(Integer)
     amount: Mapped[Decimal] = mapped_column(Numeric(10, 2))
     status: Mapped[str] = mapped_column(String(12))
+    # Owner: the "sub" claim of the Keycloak token that created the booking. NULL for bookings
+    # made before login existed; only an admin can see those. Indexed: "my bookings" filters on it.
+    user_id: Mapped[str | None] = mapped_column(String(255), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

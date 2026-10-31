@@ -19,12 +19,19 @@ run_in_vault() {  # $1 = shell script to run inside the pod
 base() {
   # Generated locally, only stored if the secret doesn't exist yet (re-runs don't rotate them).
   local pg_admin payment_key grafana_admin splunk_admin hec_token
+  local kc_pg_admin kc_db kc_admin kc_alice kc_bob kc_railadmin
   pg_admin=$(openssl rand -hex 24)
   payment_key="pay_test_$(openssl rand -hex 16)"
   grafana_admin=$(openssl rand -hex 16)
   splunk_admin=$(openssl rand -hex 16)
   # Splunk HEC tokens are GUIDs.
   hec_token=$(python3 -c 'import uuid; print(uuid.uuid4())')
+  kc_pg_admin=$(openssl rand -hex 24)
+  kc_db=$(openssl rand -hex 24)
+  kc_admin=$(openssl rand -hex 16)
+  kc_alice=$(openssl rand -hex 8)
+  kc_bob=$(openssl rand -hex 8)
+  kc_railadmin=$(openssl rand -hex 8)
 
   run_in_vault "
 PG_ADMIN='$pg_admin'
@@ -32,6 +39,12 @@ PAYMENT_KEY='$payment_key'
 GRAFANA_ADMIN='$grafana_admin'
 SPLUNK_ADMIN='$splunk_admin'
 HEC_TOKEN='$hec_token'
+KC_PG_ADMIN='$kc_pg_admin'
+KC_DB='$kc_db'
+KC_ADMIN='$kc_admin'
+KC_ALICE='$kc_alice'
+KC_BOB='$kc_bob'
+KC_RAILADMIN='$kc_railadmin'
 $(cat <<'EOF'
 # --- KV v2: static secrets, versioned (every write keeps the previous version).
 vault secrets list | grep -q '^secret/' || vault secrets enable -path=secret kv-v2
@@ -45,6 +58,18 @@ vault kv get secret/splunk/admin >/dev/null 2>&1 \
   || vault kv put secret/splunk/admin password="$SPLUNK_ADMIN"
 vault kv get secret/splunk/hec >/dev/null 2>&1 \
   || vault kv put secret/splunk/hec token="$HEC_TOKEN"
+# Keycloak: superuser of its own Postgres, the login Keycloak uses for its database (not a
+# superuser), Keycloak's first admin, and the test users' passwords (substituted into the
+# realm import, so no password is ever in git).
+vault kv get secret/keycloak/postgres-admin >/dev/null 2>&1 \
+  || vault kv put secret/keycloak/postgres-admin password="$KC_PG_ADMIN"
+vault kv get secret/keycloak/db >/dev/null 2>&1 \
+  || vault kv put secret/keycloak/db username=keycloak password="$KC_DB"
+vault kv get secret/keycloak/admin >/dev/null 2>&1 \
+  || vault kv put secret/keycloak/admin username=admin password="$KC_ADMIN"
+vault kv get secret/keycloak/test-users >/dev/null 2>&1 \
+  || vault kv put secret/keycloak/test-users \
+       alice="$KC_ALICE" bob="$KC_BOB" railadmin="$KC_RAILADMIN"
 
 # --- Kubernetes auth: pods prove who they are with their service account token.
 # Vault checks the token with the Kubernetes API (the chart grants Vault that permission).
@@ -67,6 +92,17 @@ HCL
 vault policy write log-collector - <<'HCL'
 path "secret/data/splunk/hec" { capabilities = ["read"] }
 HCL
+# Keycloak's Postgres creates the keycloak login on first start, so it needs that password too.
+vault policy write keycloak-postgres - <<'HCL'
+path "secret/data/keycloak/postgres-admin" { capabilities = ["read"] }
+path "secret/data/keycloak/db"             { capabilities = ["read"] }
+HCL
+# Keycloak never sees its Postgres superuser password.
+vault policy write keycloak - <<'HCL'
+path "secret/data/keycloak/db"         { capabilities = ["read"] }
+path "secret/data/keycloak/admin"      { capabilities = ["read"] }
+path "secret/data/keycloak/test-users" { capabilities = ["read"] }
+HCL
 
 # --- Roles: service account + namespace -> policies. A pod with any other account gets nothing.
 # audience: only accept tokens issued for the Kubernetes API (kind's default "aud" claim), so a
@@ -88,6 +124,14 @@ vault write auth/kubernetes/role/log-collector \
   bound_service_account_names=otel-collector \
   bound_service_account_namespaces=logging \
   audience=$AUD token_policies=log-collector token_ttl=15m
+vault write auth/kubernetes/role/keycloak-postgres \
+  bound_service_account_names=keycloak-postgres \
+  bound_service_account_namespaces=keycloak \
+  audience=$AUD token_policies=keycloak-postgres token_ttl=15m
+vault write auth/kubernetes/role/keycloak \
+  bound_service_account_names=keycloak \
+  bound_service_account_namespaces=keycloak \
+  audience=$AUD token_policies=keycloak token_ttl=15m
 EOF
 )"
 }

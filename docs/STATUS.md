@@ -1,10 +1,12 @@
 # RailBook — Status
 
-**As of 2026-10-29.** All blocks done. Verification results: [06-verify](learning/06-verify.md).
+**As of 2026-10-31.** Blocks 0–6 done and on `main`. Verification results: [06-verify](learning/06-verify.md).
 Bugs found after block 6 are fixed, merged (PR #7) and deployed by the pipeline: [below](#bugs-found-after-block-6).
+**Block 7 (login with Keycloak) is built and verified on branch `auth-keycloak`**, PR open: [below](#block-7-login-with-keycloak).
 
-**Running now:** Helm revision 28, image `ghcr.io/atharva-sardar02/railbook:b527302…` (merge of PR #7).
-**Next:** authentication with Keycloak (OIDC); design chosen, not built — [below](#next-authentication).
+**Running now:** Helm `railbook` revision 34, a **local** image built from `auth-keycloak` (`railbook:dev-a2db5516193b`),
+plus Helm releases `keycloak` and `keycloak-postgres` (revision 1, namespace `keycloak`).
+**Next:** merge the block 7 PR (refresh the runner token first); the pipeline then deploys the GHCR image.
 **Still open:** Alertmanager has no receiver, so alerts fire but notify nobody.
 
 ## Progress
@@ -19,6 +21,7 @@ Bugs found after block 6 are fixed, merged (PR #7) and deployed by the pipeline:
 | 4 | Prometheus + Grafana + Alertmanager | Done | [04-prometheus-grafana](learning/04-prometheus-grafana.md) |
 | 5 | Splunk + log collector | Done | [05-splunk](learning/05-splunk.md) |
 | 6 | Verify "done when" + Twelve-Factor checklist | Done | [06-verify](learning/06-verify.md): 6/6 done-when; 11/12 factors in full, X in part (known gap) |
+| 7 | Login: Keycloak (OIDC, PKCE), API checks JWTs, bookings have owners, Alembic | Done on branch, PR open | [07-auth](learning/07-auth.md). Extras (auth metrics, alerts, `user_id` in logs, Keycloak scraping) skipped |
 
 Plain-language overview of every service and port: [00-glossary](learning/00-glossary.md).
 
@@ -46,18 +49,26 @@ are changed by `bootstrap.sh` from whatever branch you're on. If such a change n
 app-chart change, the cluster is out of step with `main` until that merge. Merge it right away,
 or change the infrastructure only after the app side is on `main`.
 
-## Next: authentication
+## Block 7: login with Keycloak
 
-Chosen 2026-10-29, not built yet:
+Designed 2026-10-29/30, built and verified 2026-10-30/31. Full write-up: [07-auth](learning/07-auth.md).
 
-- **Keycloak** in kind as the identity provider (realm `railbook`, client `railbook-web`), reached
-  through Kong at `auth.localhost`; its admin and database passwords from Vault.
-- The frontend logs in with **OIDC Authorization Code + PKCE** and sends `Authorization: Bearer <JWT>`.
-- The **API checks the JWT itself** (signature against Keycloak's public keys (JWKS), `iss`, `aud`, `exp`)
-  and stores `sub` as the booking's owner. `/stations` and `/trains` stay public; creating, viewing
-  and cancelling bookings need a token, and only the owner may see or cancel a booking (401 / 403).
-- Not Kong's auth plugins: Kong OSS has no OIDC plugin, and its `jwt` plugin can't fetch rotating keys.
-- Memory: Keycloak needs ~0.5–0.7 GB; check the budget (PRD §6.1) before installing.
+- **Keycloak 26.8.0** in kind (namespace `keycloak`, own chart, own Postgres), reached through Kong at
+  `http://auth.localhost/`. Realm `railbook` from `deploy/charts/keycloak/files/railbook-realm.json`:
+  public client `railbook-web` (PKCE S256), audience `railbook-api`, role `railbook-admin`, test users
+  `alice`, `bob`, `railadmin`. All its passwords from Vault.
+- **Browser**: hand-written Authorization Code + PKCE (`app/static/auth.js`), tokens in memory only,
+  silent re-login after a reload.
+- **API** checks the JWT itself (`app/auth.py`): RS256 signature against Keycloak's cached public keys,
+  `iss`, `aud`, `exp`. 401 bad/missing token, 403 someone else's booking, 503 keys unreachable.
+  `railbook-admin` sees and cancels everything. New `GET /bookings` lists your bookings.
+- **Alembic**: `bookings.user_id` added by migration `0002`; the cluster's existing database was
+  baselined at `0001`. The setup Job now runs **before** the new pods (`pre-upgrade`).
+- Verified: 35 tests (10 forged-token kinds), real logins through Kong, a real Chromium run, your browser.
+- Memory: Keycloak 714 MB (limit 1 GiB); WSL had ~3 GB available afterwards.
+- **Merging**: the pipeline deploys only the app chart. Keycloak, its Postgres and the Vault
+  changes come from `bootstrap.sh` (already applied from this branch), so the app chart's needs are
+  already in place on the cluster.
 
 ## Resuming a session
 
@@ -81,7 +92,10 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1/   # 200
 ```
 
 UIs: http://127.0.0.1/ (app), http://grafana.localhost/, http://prometheus.localhost/,
-http://alertmanager.localhost/, http://127.0.0.1:8000/ (Splunk). Grafana password: `scripts/vault-read.sh secret/monitoring/grafana admin_password`.
+http://alertmanager.localhost/, http://auth.localhost/admin/ (Keycloak), http://127.0.0.1:8000/ (Splunk).
+Grafana password: `scripts/vault-read.sh secret/monitoring/grafana admin_password`.
+Keycloak admin: `admin` / `scripts/vault-read.sh secret/keycloak/admin password`; test users' passwords:
+`scripts/vault-read.sh secret/keycloak/test-users alice` (also `bob`, `railadmin`).
 
 When stopping for the day:
 
@@ -100,3 +114,6 @@ docker stop splunk railbook-control-plane railbook-test-pg   # frees ~5 GB of me
 - Revoking the API's DB leases by hand (`vault lease revoke -prefix database/creds/railbook-api`) makes the site 503 until the sidecar's next renewal attempt notices (up to ~40 min with the 1 h TTL). Use `kubectl -n railbook rollout restart deploy/railbook-api` to recover at once.
 - If Docker Desktop dies mid-install, a Helm release can be left `pending-install`; for a first install, `helm uninstall <release> -n <ns>` and rerun `bootstrap.sh`.
 - Check free space on C: (`df -h /mnt/c`) before large image pulls: Docker's disk image lives there, and a full C: crashes Docker Desktop.
+- Keycloak takes ~70 s to become ready after every start: it rebuilds itself (~48 s) because the stock image wasn't built with our options. Login is unavailable meanwhile; logged-in users keep working.
+- Editing `deploy/charts/keycloak/files/railbook-realm.json` rolls the Keycloak pod but does **not** change an existing realm (`--import-realm` skips it). Change it in the admin console too, or delete the realm and restart Keycloak to re-import.
+- The API caches Keycloak's signing keys until the pod restarts. If Keycloak ever drops a key on purpose (e.g. leaked), run `kubectl -n railbook rollout restart deploy/railbook-api`.

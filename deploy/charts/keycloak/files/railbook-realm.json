@@ -1,0 +1,80 @@
+{
+  "realm": "railbook",
+  "enabled": true,
+  "displayName": "RailBook",
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": false,
+  "bruteForceProtected": true,
+  "failureFactor": 5,
+  "accessTokenLifespan": 300,
+  "roles": {
+    "realm": [
+      { "name": "railbook-admin", "description": "May view and cancel any booking" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "railbook-web",
+      "name": "RailBook web frontend",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://localhost/*", "http://127.0.0.1/*"],
+      "webOrigins": ["http://localhost", "http://127.0.0.1"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost/*##http://127.0.0.1/*"
+      },
+      "protocolMappers": [
+        {
+          "name": "railbook-api audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "railbook-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "id": "7229e2e1-c2ba-4dba-8921-07875db98cac",
+      "username": "alice",
+      "enabled": true,
+      "email": "alice@railbook.localhost",
+      "emailVerified": true,
+      "firstName": "Alice",
+      "lastName": "Traveller",
+      "credentials": [{ "type": "password", "value": "${TEST_USER_ALICE_PASSWORD}", "temporary": false }]
+    },
+    {
+      "id": "64119045-a295-4b81-9e86-33603f9806ba",
+      "username": "bob",
+      "enabled": true,
+      "email": "bob@railbook.localhost",
+      "emailVerified": true,
+      "firstName": "Bob",
+      "lastName": "Traveller",
+      "credentials": [{ "type": "password", "value": "${TEST_USER_BOB_PASSWORD}", "temporary": false }]
+    },
+    {
+      "id": "358e9bdc-6873-4a6b-8d36-2987023790dc",
+      "username": "railadmin",
+      "enabled": true,
+      "email": "railadmin@railbook.localhost",
+      "emailVerified": true,
+      "firstName": "Rail",
+      "lastName": "Admin",
+      "realmRoles": ["railbook-admin"],
+      "credentials": [{ "type": "password", "value": "${TEST_USER_RAILADMIN_PASSWORD}", "temporary": false }]
+    }
+  ]
+}

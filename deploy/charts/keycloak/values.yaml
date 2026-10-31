@@ -1,0 +1,28 @@
+# Official image, pinned by digest (the tag alone could be moved to a different build).
+image: quay.io/keycloak/keycloak:26.8.0@sha256:27b3230fbabb8c9ff3c66c864cf09dcd8a41aca82e5100679d109ef0eeb05741
+
+# The public URL. Keycloak writes it into every token as "iss" and into every login-page link,
+# so it must be what the browser uses, not the in-cluster Service name.
+hostname: auth.localhost
+
+# Keycloak's own Postgres (release keycloak-postgres, same namespace).
+db:
+  host: keycloak-postgres
+  database: keycloak
+
+# Java takes its heap as a share of the container limit. 50% of 1Gi = 512Mi heap; the rest is
+# for the JVM itself (class metadata, threads, compiled code). Keycloak's default is 70%, which
+# leaves too little room under a 1Gi limit.
+heapPercent: 50
+resources:
+  requests: { cpu: 100m, memory: 512Mi }
+  limits: { memory: 1Gi }
+
+vault:
+  role: keycloak
+  dbPath: secret/data/keycloak/db
+  adminPath: secret/data/keycloak/admin
+  testUsersPath: secret/data/keycloak/test-users
+
+kong:
+  ingressClass: kong

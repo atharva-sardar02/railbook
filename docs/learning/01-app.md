@@ -302,7 +302,7 @@ uvicorn.run("app.main:app", host="0.0.0.0", port=settings.port, workers=1,
 
 Factor XII: admin tasks (create tables, seed data) run as **one-off processes from the same code and config** as the app — not manual SQL typed into a database. In kind it runs as a Kubernetes **Job** with the same image.
 
-- **`create_all`** creates missing tables, skips existing ones.
+- **`create_all`** creates missing tables, skips existing ones. *Replaced in block 7 by Alembic migrations (`migrate()`), because `create_all` can't change a table that exists, e.g. add `bookings.user_id`. See [07-auth §8](07-auth.md#8-alembic-giving-bookings-an-owner).*
 - **`on_conflict_do_nothing()` makes it idempotent** — safe to run repeatedly. The pipeline runs it on *every* deploy; without this the second run would crash on duplicate keys.
 - **The schedule insert trick:**
   ```python

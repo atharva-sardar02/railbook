@@ -1,22 +1,30 @@
 """Twelve-Factor XII: one-off admin process, same image and config as the API.
 
-python -m app.admin setup   # create tables + seed data (safe to run repeatedly)
+python -m app.admin setup   # migrate the schema + seed data (safe to run repeatedly)
 """
 
 import sys
 from datetime import date, time, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import structlog
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import Engine, inspect
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import get_engine
 from app.log_config import configure_logging
-from app.models import Base, Inventory, Schedule, Station, Train
+from app.models import Inventory, Schedule, Station, Train
 
 log = structlog.get_logger("railbook.admin")
+
+MIGRATIONS = Path(__file__).parent / "migrations"
+# The schema that create_all() built before Alembic was added (= migration 0001).
+BASELINE = "0001"
 
 STATIONS = [
     ("NDLS", "New Delhi"),
@@ -45,8 +53,30 @@ CLASSES = {
 DAYS_AHEAD = 14
 
 
+def alembic_config(connection=None) -> Config:
+    cfg = Config()  # no alembic.ini: the image doesn't need one
+    cfg.set_main_option("script_location", str(MIGRATIONS))
+    cfg.attributes["connection"] = connection
+    return cfg
+
+
+def migrate(engine: Engine) -> None:
+    """Bring the schema to the newest migration. Alembic records the applied revision in the
+    alembic_version table, so each migration runs once per database."""
+    with engine.begin() as conn:
+        cfg = alembic_config(conn)
+        tables = inspect(conn).get_table_names()
+        if "alembic_version" not in tables and "bookings" in tables:
+            # A database built by create_all() before Alembic: the tables of 0001 already
+            # exist. Record 0001 as applied instead of running it (it would fail on CREATE TABLE).
+            log.info("migrate_baseline", revision=BASELINE)
+            command.stamp(cfg, BASELINE)
+        command.upgrade(cfg, "head")
+    log.info("migrate_complete")
+
+
 def setup(session: Session) -> None:
-    Base.metadata.create_all(session.get_bind())
+    migrate(session.get_bind())
 
     # INSERT ... ON CONFLICT DO NOTHING keeps this idempotent.
     session.execute(

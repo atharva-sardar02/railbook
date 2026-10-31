@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import payment
+from app.auth import CurrentUser, User
 from app.db import get_session
 from app.metrics import BOOKING_DURATION, BOOKINGS, CANCELLATIONS
 from app.models import Booking, Inventory, Schedule
@@ -35,7 +36,7 @@ def _to_out(booking: Booking, schedule: Schedule) -> BookingOut:
 
 @router.post("/bookings", response_model=BookingOut, status_code=status.HTTP_201_CREATED)
 def create_booking(
-    req: BookingRequest, session: Annotated[Session, Depends(get_session)]
+    req: BookingRequest, user: CurrentUser, session: Annotated[Session, Depends(get_session)]
 ) -> BookingOut:
     with BOOKING_DURATION.time(), session.begin():
         schedule = session.scalar(
@@ -82,6 +83,7 @@ def create_booking(
             seats=req.seats,
             amount=amount,
             status="CONFIRMED",
+            user_id=user.sub,  # the owner is whoever the token says, never a request field
         )
         session.add(booking)
 
@@ -91,7 +93,7 @@ def create_booking(
     return _to_out(booking, schedule)
 
 
-def _load(session: Session, pnr: str, lock: bool = False) -> tuple[Booking, Schedule]:
+def _load(session: Session, pnr: str, user: User, lock: bool = False) -> tuple[Booking, Schedule]:
     query = select(Booking, Schedule).join(Schedule).where(Booking.pnr == pnr)
     if lock:
         query = query.with_for_update(of=Booking)
@@ -99,18 +101,38 @@ def _load(session: Session, pnr: str, lock: bool = False) -> tuple[Booking, Sche
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "PNR not found")
     structlog.contextvars.bind_contextvars(pnr=pnr)
+    # Authorization: the owner or an admin. Bookings from before login have no owner
+    # (user_id NULL), so only admins pass.
+    if row.Booking.user_id != user.sub and not user.is_admin:
+        log.info("booking_forbidden", owner_matches=False)
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "not your booking")
     return row.Booking, row.Schedule
 
 
+@router.get("/bookings", response_model=list[BookingOut])
+def list_bookings(
+    user: CurrentUser, session: Annotated[Session, Depends(get_session)]
+) -> list[BookingOut]:
+    """Your bookings, newest first (an admin sees everyone's)."""
+    query = select(Booking, Schedule).join(Schedule).order_by(Booking.created_at.desc()).limit(50)
+    if not user.is_admin:
+        query = query.where(Booking.user_id == user.sub)
+    return [_to_out(row.Booking, row.Schedule) for row in session.execute(query)]
+
+
 @router.get("/bookings/{pnr}", response_model=BookingOut)
-def get_booking(pnr: str, session: Annotated[Session, Depends(get_session)]) -> BookingOut:
-    return _to_out(*_load(session, pnr))
+def get_booking(
+    pnr: str, user: CurrentUser, session: Annotated[Session, Depends(get_session)]
+) -> BookingOut:
+    return _to_out(*_load(session, pnr, user))
 
 
 @router.delete("/bookings/{pnr}", response_model=BookingOut)
-def cancel_booking(pnr: str, session: Annotated[Session, Depends(get_session)]) -> BookingOut:
+def cancel_booking(
+    pnr: str, user: CurrentUser, session: Annotated[Session, Depends(get_session)]
+) -> BookingOut:
     with session.begin():
-        booking, schedule = _load(session, pnr, lock=True)
+        booking, schedule = _load(session, pnr, user, lock=True)
         if booking.status == "CANCELLED":
             raise HTTPException(status.HTTP_409_CONFLICT, "booking already cancelled")
         inv = session.scalar(

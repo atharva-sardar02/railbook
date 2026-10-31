@@ -30,6 +30,22 @@ class Settings(BaseSettings):
     # Mock payment provider key, from Vault KV.
     payment_api_key: SecretStr = SecretStr("")
 
+    # Login (OIDC, Keycloak). Not secrets: the API only needs Keycloak's PUBLIC keys.
+    # Defaults match the kind setup; they also keep the pre-upgrade setup Job working, which
+    # runs with the previous release's ConfigMap.
+    # "iss" in every token: the public URL the browser uses, not the in-cluster one.
+    oidc_issuer: str = "http://auth.localhost/realms/railbook"
+    # Where the public keys are fetched: Keycloak's Service inside the cluster.
+    oidc_jwks_url: str = (
+        "http://keycloak.keycloak.svc:8080/realms/railbook/protocol/openid-connect/certs"
+    )
+    # "aud" every token must contain: tokens issued for other apps are refused.
+    oidc_audience: str = "railbook-api"
+    # The frontend's client in Keycloak (public client, PKCE); sent to the browser.
+    oidc_client_id: str = "railbook-web"
+    # Realm role that may see and cancel every booking.
+    oidc_admin_role: str = "railbook-admin"
+
     @property
     def database_url(self) -> URL:
         return URL.create(

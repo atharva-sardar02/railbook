@@ -27,7 +27,7 @@ spec:
                 name: railbook-api
                 port: { name: http }
           {{- end }}
-          {{- range list "/" "/openapi.json" }}
+          {{- range list "/" "/openapi.json" "/auth-config" }}
           - path: {{ . }}
             pathType: Exact
             backend:

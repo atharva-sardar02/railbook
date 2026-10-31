@@ -52,6 +52,15 @@ def test_frontend_is_served(client):
     assert '<script src="/static/app.js"' in page.text
     assert client.get("/static/app.js").status_code == 200
     assert client.get("/static/styles.css").status_code == 200
+    assert '<script src="/static/auth.js"' in page.text
+    assert client.get("/static/auth.js").status_code == 200
+
+
+def test_auth_config_is_public(anon):
+    assert anon.get("/auth-config").json() == {
+        "issuer": "http://auth.localhost/realms/railbook",
+        "client_id": "railbook-web",
+    }
 
 
 def test_search_returns_seeded_train(client):
