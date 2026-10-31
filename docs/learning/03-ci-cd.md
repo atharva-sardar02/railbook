@@ -50,7 +50,8 @@ How a commit becomes running pods, why each safeguard exists, and the mistakes m
            smoke test via Kong (/ and /stations → 200)
                                    │
                                    ▼
- kind: new API pods (Vault injects secrets) → setup Job → old pods drained
+ kind: setup Job (migrations + seed) → new API pods (Vault injects secrets) → old pods drained
+      (until block 7 the Job ran after the new pods; see 07-auth §8)
 ```
 
 First real run: merge commit `71bad3b` → Helm revision 6 running `ghcr.io/atharva-sardar02/railbook:71bad3b…`, smoke test 200/200.

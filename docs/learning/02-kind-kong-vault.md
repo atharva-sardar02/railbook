@@ -362,7 +362,7 @@ Non-secret config only: `PORT`, `LOG_LEVEL`, `DB_HOST`, `DB_PORT`, `DB_NAME`, `D
 
 | Piece | Why |
 |---|---|
-| Helm hook `post-install,post-upgrade` | Runs `python -m app.admin setup` after every deploy (factor XII). |
+| Helm hook `post-install,post-upgrade` | Runs `python -m app.admin setup` after every deploy (factor XII). *Block 7: now `post-install,pre-upgrade`, so migrations run before the new pods ([07-auth §8](07-auth.md#8-alembic-giving-bookings-an-owner)).* |
 | `hook-delete-policy: before-hook-creation` | Jobs can't be edited once created; the old one is deleted just before the new run. The finished Job stays for `kubectl logs job/railbook-setup`. |
 | `agent-pre-populate-only` | **A Job completes only when all containers exit; the sidecar never exits.** With a sidecar this Job would run forever. |
 | Same service account, env, image | Same config as the API — the definition of factor XII. |

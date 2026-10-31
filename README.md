@@ -6,7 +6,7 @@ See [docs/PRD.md](docs/PRD.md) for requirements, design and decisions, and [docs
 
 ## Run it locally
 
-Needs Docker, kind, Helm and kubectl. Brings up kind, Kong, Vault, monitoring, Postgres and the API in order:
+Needs Docker, kind, Helm and kubectl. Brings up kind, Kong, Vault, monitoring, Postgres, Keycloak and the API in order:
 
 ```bash
 scripts/bootstrap.sh          # safe to rerun; also re-unseals Vault after a restart
@@ -15,7 +15,8 @@ open http://127.0.0.1/         # web frontend through Kong (API docs at /docs)
 
 | UI | URL | Login |
 |---|---|---|
-| RailBook | http://127.0.0.1/ | — |
+| RailBook | http://127.0.0.1/ (or http://localhost/) | **Log in** top right: `alice`, `bob` (users), `railadmin` (admin); passwords: `scripts/vault-read.sh secret/keycloak/test-users alice` |
+| Keycloak | http://auth.localhost/admin/ | `admin` / `scripts/vault-read.sh secret/keycloak/admin password` |
 | Grafana | http://grafana.localhost/ (dashboard: `/d/railbook`) | `admin` / `scripts/vault-read.sh secret/monitoring/grafana admin_password` |
 | Prometheus | http://prometheus.localhost/ | — |
 | Alertmanager | http://alertmanager.localhost/ | — |
@@ -35,5 +36,6 @@ Vault's unseal keys and root token are written to `~/.railbook/vault-init.json` 
 - [Block 4 — Prometheus and Grafana, explained](docs/learning/04-prometheus-grafana.md)
 - [Block 5 — Splunk and the log collector, explained](docs/learning/05-splunk.md)
 - [Block 6 — Verification against the PRD](docs/learning/06-verify.md)
+- [Block 7 — Login with Keycloak (OIDC, PKCE), owners and Alembic, explained](docs/learning/07-auth.md)
 - [How the app flows — diagrams of every request, secret, metric and log path](docs/learning/app-flow.html)
 - [Bugs found after block 6 — causes, fixes, how each was verified](docs/STATUS.md#bugs-found-after-block-6)

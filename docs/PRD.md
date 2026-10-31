@@ -1,6 +1,6 @@
 # RailBook — Product Requirements Document
 
-**Status:** Done, verified 2026-10-24; bugs found afterwards fixed 2026-10-29 — see [STATUS.md](STATUS.md) and [06-verify](learning/06-verify.md) · **Date:** 2026-10-20 · **Timebox:** 1 day (~8 hours) · **Runs on:** your laptop only (WSL2 + kind)
+**Status:** Done, verified 2026-10-24; bugs found afterwards fixed 2026-10-29; login with Keycloak added as block 7 (2026-10-31, [07-auth](learning/07-auth.md)) — see [STATUS.md](STATUS.md) and [06-verify](learning/06-verify.md) · **Date:** 2026-10-20 · **Timebox:** 1 day (~8 hours) · **Runs on:** your laptop only (WSL2 + kind)
 
 ---
 
@@ -136,12 +136,12 @@ No user accounts: the passenger name is a field on the booking.
 | Layer | Choice | Notes |
 |---|---|---|
 | Language / framework | **Python 3.12 + FastAPI** | `prometheus-fastapi-instrumentator`, `structlog`, `pydantic-settings`. |
-| Database | **PostgreSQL 16** (official image) as a StatefulSet in its **own Helm chart** (`deploy/charts/postgres`), installed before the app; admin password from Vault | Tables created by the admin Job (`python -m app.admin setup`), owned by a `railbook_owner` group role so they never belong to an expiring Vault user — no Alembic. |
+| Database | **PostgreSQL 16** (official image) as a StatefulSet in its **own Helm chart** (`deploy/charts/postgres`), installed before the app; admin password from Vault | Tables created by the admin Job (`python -m app.admin setup`), owned by a `railbook_owner` group role so they never belong to an expiring Vault user. *Since block 7 (2026-10-31): the Job runs **Alembic** migrations (`app/migrations`) before the new pods start.* |
 | ORM | SQLAlchemy 2.x | |
 | Tests | pytest + httpx | |
 | Cluster | **kind** (Kubernetes in Docker), single node, in WSL2 | `kind-config.yaml` with port 80 mapping. |
 | Gateway | **Kong Ingress Controller** (open-source Kong Gateway, DB-less) | Configured with Ingress + `KongPlugin` resources. |
-| Packaging | Helm 4.3 | Own charts: `railbook` (API, routing, setup Job) and `postgres`; upstream charts for Kong, Vault, Prometheus, OTel. The pipeline deploys only the app chart. |
+| Packaging | Helm 4.3 | Own charts: `railbook` (API, routing, setup Job), `postgres` (installed twice: `railbook-postgres`, `keycloak-postgres`) and `keycloak`; upstream charts for Kong, Vault, Prometheus, OTel. The pipeline deploys only the app chart. |
 | Tooling versions | kind v0.33.0, Helm v4.3.0, kubectl v1.36 | Installed in `~/.local/bin`. |
 | Image registry | **GitHub Container Registry (GHCR)** | Free for public repos; package set to public. |
 | CI | GitHub Actions on GitHub-hosted runners | PRs and `main`. |
@@ -149,6 +149,7 @@ No user accounts: the passenger name is a field on the booking.
 | Metrics | `kube-prometheus-stack` | |
 | Logs | Splunk Enterprise 10.6.0 (Free license) in Docker + Splunk OTel Collector 0.161.0 (hand-written DaemonSet) | Splunk lives outside kind, so rebuilding the cluster keeps logs. Not the collector's Helm chart: it always takes the HEC token from a Kubernetes Secret. |
 | Secrets | **HashiCorp Vault** 2.0 (chart 0.34.1), persistent Raft storage + Agent Injector | Runs in kind; manual unseal by script after restarts. |
+| Login (block 7) | **Keycloak 26.8.0** (official image, own chart), OIDC Authorization Code + PKCE; API checks JWTs with **PyJWT** | Own Postgres; realm imported from JSON; reached through Kong at `auth.localhost`. See [07-auth](learning/07-auth.md). |
 | Security scans | gitleaks, Trivy | |
 
 ### Architecture
@@ -169,6 +170,7 @@ flowchart LR
             api[RailBook API ×N]
             pg[(PostgreSQL)]
             vault[Vault · Raft on PVC<br/>+ Agent Injector]
+            kc[Keycloak<br/>+ own PostgreSQL]
             prom[Prometheus · Grafana<br/>· Alertmanager]
             otel[Splunk OTel Collector]
         end
@@ -176,6 +178,8 @@ flowchart LR
 
     user[Passenger · Swagger UI] -->|localhost:80| kong
     kong --> api
+    kong -->|auth.localhost| kc
+    api -->|public keys JWKS| kc
     api --> pg
     api -->|K8s auth → dynamic DB creds| vault
     vault -->|creates users| pg
@@ -223,7 +227,8 @@ If running late, the day runs longer — nothing is cut. Building every piece, i
   | Postgres + API ×2 | ~0.4 GB |
   | Splunk OTel Collector (one DaemonSet pod, 256 MiB limit) | ~0.2 GB (measured) |
   | Self-hosted runner | ~0.2 GB |
-  | **Total** | **~5.7 GB**, leaving ~2.2 GB for WSL, Docker and image builds. Measured 2026-10-29: kind node 3.7 GB (all pods 3.4 GB) + Splunk 1.4 GB |
+  | Keycloak (1 GiB limit, heap 50%) + its Postgres (block 7) | ~0.75 GB (measured 2026-10-30: Keycloak 714 MB) |
+  | **Total** | **~6.5 GB**, leaving ~1.5 GB for WSL, Docker and image builds. Measured 2026-10-29: kind node 3.7 GB (all pods 3.4 GB) + Splunk 1.4 GB. With Keycloak (2026-10-30): WSL still had ~3.0 GB available (the estimates are generous) |
 
   Scale the API to 3 replicas only to demonstrate factor VIII, then back to 2. If pods get `OOMKilled` or stay `Pending`, check `kubectl top` and the budget before anything else.
 - **Single node.** Use one control-plane node only; a multi-node cluster costs ~1 GB per node and teaches nothing extra here.
@@ -308,7 +313,7 @@ If running late, the day runs longer — nothing is cut. Building every piece, i
 |---|---|
 | Any cloud deployment (GKE, Artifact Registry, Cloud Logging) | Runs on your laptop only. |
 | Multi-node cluster, HA for anything | Not needed to learn the concepts; costs RAM. |
-| User accounts, login, roles | Not among the concepts. *2026-10-29: chosen as the next learning block (Keycloak, OIDC); not built yet — see STATUS.* |
+| ~~User accounts, login, roles~~ | *Built as block 7 (2026-10-31): Keycloak, OIDC + PKCE, owner and admin rules. See [07-auth](learning/07-auth.md).* Still out: self-registration, password reset e-mails, social login. |
 | Admin endpoints | Seed Job instead. |
 | Real payments | Mock only. |
 | Waitlist, RAC, Tatkal, seat maps | Domain complexity with no platform value. |
@@ -316,7 +321,7 @@ If running late, the day runs longer — nothing is cut. Building every piece, i
 | TLS on Kong | Plain HTTP on `localhost`. |
 | Kong Enterprise features, Kong Manager | Open-source Kong only. |
 | Vault auto-unseal, HA (3+ replicas), TLS | One persistent Vault, unsealed by script. |
-| Alembic migrations | Tables created by the admin Job. |
+| ~~Alembic migrations~~ | *Added in block 7 (2026-10-31) to give bookings an owner column.* |
 | GitOps (Argo CD), tracing, autoscaling, service mesh | Not among the concepts. |
 
 ---
@@ -352,6 +357,12 @@ If running late, the day runs longer — nothing is cut. Building every piece, i
 | 2026-10-29 | Vault injector webhook fails closed (`failurePolicy: Fail`), applied only to pods labelled `vault-agent-inject: "true"`; injector anti-affinity off (one node) |
 | 2026-10-29 | Grafana memory limit 768 MiB |
 | 2026-10-29 | `RailBookApiDown` also fires when no API pod is Ready |
-| 2026-10-29 | Next learning block: authentication with Keycloak (OIDC, Authorization Code + PKCE); the API checks JWTs itself. Planned, not built |
+| 2026-10-29 | Next learning block: authentication with Keycloak (OIDC, Authorization Code + PKCE); the API checks JWTs itself |
+| 2026-10-30 | Keycloak via a hand-written chart (not Operator/Bitnami), its own Postgres instance (second release of the `postgres` chart), DB password as a static Vault KV secret, realm as JSON imported on first start |
+| 2026-10-30 | Alembic for schema changes; existing databases baselined at `0001`; old bookings keep `user_id` NULL (admin-only); setup Job becomes a `pre-upgrade` hook (`post-install` on first install) |
+| 2026-10-30 | Realm role `railbook-admin` may see and cancel every booking; others only their own (403) |
+| 2026-10-30 | Frontend: hand-written PKCE, tokens in memory only; API: PyJWT + PyJWKClient, RS256 only, `iss`/`aud`/`exp` required |
+| 2026-10-31 | API keeps each signing key once seen (`cache_keys`), so valid tokens work while Keycloak is down; a removed key needs an API restart |
+| 2026-10-31 | Auth extras skipped: no 401/403 or login-failure metrics, no auth alerts, no `user_id` in the request log, Keycloak's `/metrics` not scraped |
 
 No open questions.

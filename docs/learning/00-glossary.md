@@ -19,6 +19,7 @@ RailBook is a small train-ticket website. Think of it as a railway station:
 | The station's dashboard and alarm bells | **Prometheus, Grafana, Alertmanager** | Count everything (bookings, errors, speed), draw it as charts, and ring an alarm when something goes wrong. |
 | The CCTV archive | **Splunk** + the **log collector** | The collector picks up every log line written in the station and carries it to the archive; Splunk keeps it so you can search what happened, e.g. one request by its ticket number. |
 | The building contractor | **GitHub Actions + the runner on your laptop** | When new code is approved, checks it, packages it and swaps it in without closing the station. |
+| The ticket office that checks IDs and issues passes | **Keycloak** (block 7) | You show who you are once (username + password) and get a signed pass (a token) that expires in 5 minutes. Clerks check the pass's stamp themselves; they never phone the office or see your password. |
 | The building itself | **kind** (Kubernetes in Docker) | The "mini data centre" on your laptop that runs all of the above and restarts anything that falls over. |
 
 ### What is a port?
@@ -43,9 +44,10 @@ reachable from inside the cluster, which is the point: only Kong's door is opene
 | http://grafana.localhost/ | Dashboards (charts) | `admin` + password from `scripts/vault-read.sh secret/monitoring/grafana admin_password` |
 | http://prometheus.localhost/ | Raw metrics, queries, alert rules, scrape targets | none |
 | http://alertmanager.localhost/ | Alerts currently firing | none |
+| http://auth.localhost/admin/ | Keycloak's admin console: realm, users, roles, sessions | `admin` + password from `scripts/vault-read.sh secret/keycloak/admin password` (test users: `scripts/vault-read.sh secret/keycloak/test-users alice`, also `bob`, `railadmin`) |
 | http://127.0.0.1:8000/ | Splunk: search the logs (start it with `scripts/splunk.sh`) | Free license has authentication off: the login form accepts any password (the real one is `scripts/vault-read.sh secret/splunk/admin password`) |
 
-All five go through the same door (port 80) and Kong decides by the name you typed which
+All six go through the same door (port 80) and Kong decides by the name you typed which
 service answers. Browsers know `*.localhost` means your own machine. (Old `curl` versions don't:
 use `curl -H 'Host: grafana.localhost' http://127.0.0.1/`.)
 
@@ -60,7 +62,7 @@ use `curl -H 'Host: grafana.localhost' http://127.0.0.1/`.)
 | **Kong controller** | Reads Kubernetes routing rules and configures the gateway | `kong` | 10254/10255 (metrics), 443 (validation webhook) | No |
 | **RailBook API** | The app: trains, bookings, cancellations, the website files | `railbook` | **8000** in the pod, Service `railbook-api` port 80 | Only via Kong |
 | RailBook API extra paths | `/healthz` (alive?), `/readyz` (ready?), `/metrics` (numbers) | `railbook` | 8000 | No: Kong deliberately doesn't route them |
-| **RailBook setup Job** | Creates tables and sample trains after each deploy, then exits | `railbook` | none (runs and stops) | No |
+| **RailBook setup Job** | Migrates the tables (Alembic) and adds sample trains **before** each upgrade's new pods start (after the first install), then exits | `railbook` | none (runs and stops) | No |
 | **Postgres** | The database | `railbook` | **5432** | No |
 | Test Postgres | A separate database only for running the tests on your laptop | (Docker) | 5432 in the container | Yes: `127.0.0.1:5433` |
 | **Vault** | The secrets safe (and its web UI) | `vault` | **8200** (API + UI), 8201 (internal cluster traffic) | No (use `kubectl port-forward`) |
@@ -76,18 +78,26 @@ use `curl -H 'Host: grafana.localhost' http://127.0.0.1/`.)
 | **GitHub runner** | Waits for "deploy" jobs from GitHub and runs them on your laptop | (systemd service, user `ghrunner`) | none: it only calls out to GitHub on 443 | — |
 | **Splunk** | Log storage and search | (Docker container `splunk`, on the `kind` network, outside the cluster) | **8000** (web UI), **8088** (HEC: receives logs), 8089 (management API), 8191 (internal KV store) | Web UI only: `127.0.0.1:8000`. HEC only from the cluster as `https://splunk:8088`; 8089/8191 inside the container only |
 | **Log collector** (OTel Collector) | Reads every `railbook` and `kong` pod's log files on the node and sends them to Splunk | `logging` | 8888 (its own metrics), 13133 (health) | No |
+| **Keycloak** (block 7) | Login: shows the login page, issues signed tokens, publishes its public keys | `keycloak` | **8080** (login pages, tokens, keys), 9000 (`/health/*`, `/metrics`) | 8080 via Kong: `auth.localhost`; 9000 no |
+| **Keycloak's Postgres** | Keycloak's own database (users, sessions, its signing keys) | `keycloak` | **5432** | No |
 
 ### How one booking travels
 
-1. You click **Book** on http://127.0.0.1/. Your browser sends `POST /bookings` to `127.0.0.1`, port 80.
+0. (Since block 7) You logged in: the browser went to **Keycloak** at `auth.localhost`, you typed
+   your password there, and the browser got a signed **access token** that it keeps in memory.
+1. You click **Book** on http://127.0.0.1/. Your browser sends `POST /bookings` to `127.0.0.1`, port 80,
+   with `Authorization: Bearer <token>`.
 2. Docker forwards port 80 into the kind node, port 30080, which is **Kong**.
 3. Kong gives the request an ID (`X-Request-ID`), checks you haven't booked more than 20 times this
    minute (otherwise: 429 "too many requests"), counts it, logs it, and forwards it to the
    `railbook-api` Service on port 80.
-4. Kubernetes picks one of the two **API** pods and delivers it to port 8000.
+4. Kubernetes picks one of the two **API** pods and delivers it to port 8000. The API checks the
+   token's signature with Keycloak's public key (fetched once, cached), plus who issued it, who
+   it's for and that it hasn't expired. No token or a bad one: 401.
 5. The API locks the seats in **Postgres** (port 5432), using a database user that **Vault**
    created for this pod a few minutes or hours ago, charges the (pretend) payment with a key
-   that also came from Vault, saves the booking and answers 201 with your PNR.
+   that also came from Vault, saves the booking **with your user ID from the token** and answers
+   201 with your PNR. Later, only you (or an admin) can see or cancel it; anyone else gets 403.
 6. Every 30 s, **Prometheus** asks the API (`:8000/metrics`), Kong (`:8100/metrics`) and Vault
    (`:8200/v1/sys/metrics`) for their counters. **Grafana** draws them; if errors pile up,
    a rule fires and **Alertmanager** shows the alarm.
@@ -187,3 +197,21 @@ A methodology for cloud-ready apps. Key factors used in RailBook:
 - **DaemonSet:** runs exactly one copy of a pod on every node; the usual shape for anything that reads node-local files such as logs.
 - **hostPath:** mounts a directory of the node itself into a pod (here `/var/log/pods`, read-only).
 - **Checkpoint / at-least-once:** the collector remembers how far it has read each file, so a restart neither skips nor re-sends lines, except a small window if it's killed mid-send. So duplicates are possible; lines are lost only if Splunk stays unreachable longer than the 5-minute retry window, or the collector restarts while batches are still queued in memory.
+
+### Login (block 7)
+- **Authentication vs authorization:** *who are you?* (fails → **401**) vs *may you do this?* (fails → **403**).
+- **Identity provider (IdP):** the service that owns users and passwords and issues tokens. Ours: **Keycloak**.
+- **OAuth 2.0 / OpenID Connect (OIDC):** the standards for "log in somewhere else and come back with a token". OIDC adds *who the user is* (ID token, `sub`) on top of OAuth's access tokens.
+- **Realm / client / user / role:** Keycloak's tenant (`railbook`), an app allowed to request tokens (`railbook-web`), a person (`alice`), and a named permission given to users (`railbook-admin`).
+- **Public vs confidential client:** a public client runs on the user's device (browser) and can't keep a secret; a confidential client runs on a server and has a client secret.
+- **Authorization Code flow:** the browser goes to the IdP's login page and comes back with a one-time **code**, which is swapped for tokens.
+- **PKCE:** a fresh secret per login. The browser sends only the SHA-256 hash (**challenge**) at the start and the original (**verifier**) when swapping the code; a stolen code alone is useless.
+- **state:** a random value the IdP echoes back, proving this tab started the login (stops forged login responses, CSRF).
+- **JWT:** `header.payload.signature`, base64url. **Signed, not encrypted:** anyone can read the payload; nobody can change it without breaking the signature.
+- **Claims:** fields in a JWT. `iss` (issuer), `sub` (user ID), `aud` (who it's for), `azp` (which app asked), `exp`/`iat` (expiry, issued at), `realm_access.roles`.
+- **Access / refresh / ID token:** the access token goes to the API (5 min here); the refresh token gets new access tokens without a password; the ID token describes the login (used for logout).
+- **JWKS:** the URL where the IdP publishes its **public** keys; `kid` in a token's header says which key signed it. Keys rotate; the private key never leaves the IdP.
+- **Algorithm confusion:** a forgery that changes a token's `alg` (to `none`, or to HS256 signed with the public key). Prevented by the API fixing the allowed algorithm (`RS256`).
+- **CORS:** the browser rule that a page may read a response from another origin only if that origin says so (`Access-Control-Allow-Origin`). Keycloak allows `http://localhost` via the client's `webOrigins`.
+- **prompt=none (silent login):** "don't show a login page; give me a code if a session exists, else fail". Used after a reload, since tokens live only in memory.
+- **Database migration (Alembic):** a numbered, versioned schema change. `alembic_version` records the applied one; `upgrade head` runs the missing ones. **Baseline/stamp:** mark a revision as applied without running it. **Expand/contract:** each migration must work with the code still running.
